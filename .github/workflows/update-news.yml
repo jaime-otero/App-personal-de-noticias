@@ -105,6 +105,16 @@ jobs:
           path: .cache/models
           key: embed-models-${{ hashFiles('scripts/ingest/embed.js') }}
           restore-keys: embed-models-
+      # Archivo semanal (pestaña Semanal): cada ejecución añade sus noticias a la semana en curso,
+      # así que se guarda entre ejecuciones como la edición anterior. Si la caché se pierde, el
+      # archivo vuelve a empezar desde la edición actual.
+      - name: Recuperar el archivo semanal
+        if: env.FRESH != '1'
+        uses: actions/cache@v6
+        with:
+          path: web/data/weekly
+          key: weekly-${{ github.run_id }}
+          restore-keys: weekly-
       - name: Recuperar los embeddings anteriores
         if: env.FRESH != '1'
         uses: actions/cache@v6

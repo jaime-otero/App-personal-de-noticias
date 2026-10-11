@@ -1,0 +1,130 @@
+// Weekly archive ("Semanal"): the most important stories of each week, for the whole paper and
+// for every section and subsection. Each edition only holds the last 48 h, so every run folds its
+// stories into the archive of the week they started in (Monday to Sunday, Spain time).
+//
+// Importance = the most outlets that covered the story in any edition (its peak), then the
+// languages it was told in. Peaks only grow and a story is re-added while it is in the edition,
+// so keeping just the top TOP_N of every list on each run loses nothing that could still make it.
+//
+// Files (web/data/weekly/): index.json lists the weeks; one <week>.json per week.
+
+import { SECTIONS } from '../../web/lib/taxonomy.js';
+
+export const TOP_N = 10;
+export const TOP_ALL = 20;
+export const KEEP_WEEKS = 12;
+const MAX_SOURCES = 6;
+const MAX_EXTRACT = 280;
+const TZ = 'Europe/Madrid';
+
+export const WEEKLY_KEYS = ['all', ...SECTIONS.flatMap((s) => [s.id, ...s.subs.map((x) => x.key)])];
+
+const ymd = (ms) => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(ms).map((x) => [x.type, x.value]));
+  return [Number(p.year), Number(p.month), Number(p.day)];
+};
+const iso = (d) => d.toISOString().slice(0, 10);
+
+// ISO week of a moment in Spain: { id: '2026-W41', start: '2026-10-05', end: '2026-10-11' }.
+export function weekOf(ms) {
+  const [y, m, d] = ymd(ms);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  const dow = (date.getUTCDay() + 6) % 7; // Monday = 0
+  const monday = new Date(date.getTime() - dow * 864e5);
+  const thursday = new Date(monday.getTime() + 3 * 864e5); // the ISO year is the Thursday's
+  const year = thursday.getUTCFullYear();
+  const week = 1 + Math.floor((thursday - Date.UTC(year, 0, 1)) / (7 * 864e5));
+  return { id: `${year}-W${String(week).padStart(2, '0')}`, start: iso(monday), end: iso(new Date(monday.getTime() + 6 * 864e5)) };
+}
+
+const inKey = (story, key) => key === 'all' || story.sections.some((s) => s === key || s.startsWith(`${key}/`));
+
+// When the story started: its oldest article.
+const firstSeen = (story) => story.sources.map((s) => s.publishedAt).filter(Boolean).sort()[0] ?? story.publishedAt;
+
+// What the archive keeps of a story (news.json carries more).
+function compact(story, now) {
+  const out = {
+    id: story.id,
+    title: story.title,
+    image: story.image,
+    lang: story.lang,
+    langs: story.langs,
+    sections: story.sections,
+    publishedAt: firstSeen(story) ?? new Date(now).toISOString(),
+    n: story.sources.length,
+    sources: story.sources.slice(0, MAX_SOURCES).map(({ title, url, source, sourceId }) => ({ title, url, source, sourceId })),
+  };
+  if (story.aiSummary) out.aiSummary = story.aiSummary;
+  else if (story.summary) out.summary = story.summary.length > MAX_EXTRACT ? `${story.summary.slice(0, MAX_EXTRACT - 1)}…` : story.summary;
+  if (story.spoiler) out.spoiler = true;
+  return out;
+}
+
+const rank = (a, b) => b.n - a.n || b.langs.length - a.langs.length || a.publishedAt.localeCompare(b.publishedAt);
+
+// The same story under another id (an older article joined it): any shared link.
+function findSame(week, story) {
+  if (week.stories[story.id]) return week.stories[story.id];
+  const urls = new Set(story.sources.map((s) => s.url));
+  return Object.values(week.stories).find((s) => s.sources.some((x) => urls.has(x.url)));
+}
+
+// Recompute every list and drop the stories no list keeps.
+function prune(week) {
+  const all = Object.values(week.stories).sort(rank);
+  week.top = {};
+  for (const key of WEEKLY_KEYS) {
+    const ids = all.filter((s) => inKey(s, key)).slice(0, key === 'all' ? TOP_ALL : TOP_N).map((s) => s.id);
+    if (ids.length) week.top[key] = ids;
+  }
+  const kept = new Set(Object.values(week.top).flat());
+  week.stories = Object.fromEntries(all.filter((s) => kept.has(s.id)).map((s) => [s.id, s]));
+}
+
+// weeks: Map week id → week ({ id, start, end, updatedAt, stories, top }), updated in place.
+// Returns the ids of the weeks that changed.
+export function foldStories(weeks, stories, now = Date.now()) {
+  const changed = new Set();
+  const oldest = weekOf(now - (KEEP_WEEKS - 1) * 7 * 864e5).start;
+  for (const story of stories) {
+    if (!story.sources?.length) continue;
+    const c = compact(story, now);
+    const w = weekOf(Date.parse(c.publishedAt) || now);
+    if (w.start < oldest) continue;
+    let week = weeks.get(w.id);
+    if (!week) weeks.set(w.id, (week = { ...w, stories: {}, top: {} }));
+    const same = findSame(week, c);
+    if (same) {
+      delete week.stories[same.id];
+      // Keep the peak coverage and the AI summary of whichever copy had them.
+      if (same.n > c.n) Object.assign(c, { n: same.n, sources: same.sources });
+      if (!c.aiSummary && same.aiSummary) {
+        c.aiSummary = same.aiSummary;
+        delete c.summary;
+      }
+      if (same.publishedAt < c.publishedAt) c.publishedAt = same.publishedAt;
+      if (same.spoiler) c.spoiler = true; // once a spoiler, always covered
+    }
+    week.stories[c.id] = c;
+    changed.add(w.id);
+  }
+  for (const id of changed) {
+    const week = weeks.get(id);
+    prune(week);
+    week.updatedAt = new Date(now).toISOString();
+  }
+  for (const id of weeks.keys()) if (weeks.get(id).start < oldest) weeks.delete(id);
+  return [...changed];
+}
+
+// index.json: newest week first, with how many stories each one keeps.
+export function weeklyIndex(weeks, now = Date.now()) {
+  return {
+    generatedAt: new Date(now).toISOString(),
+    current: weekOf(now).id,
+    weeks: [...weeks.values()]
+      .sort((a, b) => b.start.localeCompare(a.start))
+      .map(({ id, start, end, updatedAt, stories }) => ({ id, start, end, updatedAt, stories: Object.keys(stories).length })),
+  };
+}

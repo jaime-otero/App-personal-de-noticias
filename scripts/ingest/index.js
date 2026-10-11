@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,11 +11,13 @@ import { summarize, hasAIKey } from './summarize.js';
 import { SECTIONS } from '../../web/lib/taxonomy.js';
 import { aiJobs, inSection } from './jobs.js';
 import { isSpoiler } from '../../web/lib/spoilers.js';
+import { foldStories, weeklyIndex } from './weekly.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const OUT = resolve(ROOT, 'web/data/news.json');
 const META = resolve(ROOT, 'web/data/meta.json');
 const VECTORS = resolve(ROOT, 'web/data/vectors.json');
+const WEEKLY = resolve(ROOT, 'web/data/weekly');
 const MAX_AGE_HOURS = 48;
 const MAX_PER_SOURCE = 30;
 const AI_CONCURRENCY = 3;
@@ -53,6 +55,28 @@ async function loadPrevious() {
   } catch {
     return null;
   }
+}
+
+// Weekly archive (in Actions, restored from the cache by the workflow like news.json): the
+// stories of this edition join the week they started in. Returns a line for the log.
+async function updateWeekly(stories, now) {
+  const weeks = new Map();
+  const files = await readdir(WEEKLY).catch(() => []);
+  for (const f of files.filter((f) => /^\d{4}-W\d{2}\.json$/.test(f))) {
+    try {
+      const week = JSON.parse(await readFile(resolve(WEEKLY, f), 'utf8'));
+      weeks.set(week.id, week);
+    } catch {
+      /* a broken week file is rebuilt from this edition */
+    }
+  }
+  const changed = foldStories(weeks, stories, now);
+  await mkdir(WEEKLY, { recursive: true });
+  for (const id of changed) await writeFile(resolve(WEEKLY, `${id}.json`), JSON.stringify(weeks.get(id)));
+  for (const f of files) if (/^\d{4}-W\d{2}\.json$/.test(f) && !weeks.has(f.slice(0, -5))) await rm(resolve(WEEKLY, f), { force: true });
+  const index = weeklyIndex(weeks, now);
+  await writeFile(resolve(WEEKLY, 'index.json'), JSON.stringify(index));
+  return `${index.weeks.length} semanas (${index.weeks.map((w) => `${w.id} ${w.stories}`).join(', ')})`;
 }
 
 async function main() {
@@ -154,6 +178,12 @@ async function main() {
     : null;
   if (vectorsJson) await writeFile(VECTORS, vectorsJson);
   else await rm(VECTORS, { force: true });
+  let weeklyLog;
+  try {
+    weeklyLog = await updateWeekly(stories, now);
+  } catch (err) {
+    weeklyLog = `no actualizado: ${err.message}`;
+  }
 
   const failed = status.filter((s) => !s.ok);
   const count = (sec) => stories.filter((s) => inSection(s, sec)).length;
@@ -167,6 +197,7 @@ async function main() {
   );
   console.log(`  news.json ${kb(JSON.stringify(output))}${vectorsJson ? `, vectors.json ${kb(vectorsJson)}` : ''}`);
   console.log(`  multi-fuente: ${stories.filter((s) => s.sources.length > 1).length}, con resumen IA: ${stories.filter((s) => s.aiSummary).length}, briefings nuevos: ${skipAI ? '0 (IA omitida)' : fresh}/${Object.keys(briefings).length}`);
+  console.log(`  semanal: ${weeklyLog}`);
   const models = [...new Set(Object.values(briefings).filter((b) => b.at === output.generatedAt).map((b) => b.model))];
   if (models.length) console.log(`  modelos IA: ${models.join(', ')}`);
   for (const f of failed) console.log(`  ✗ ${f.id}: ${f.error}`);
