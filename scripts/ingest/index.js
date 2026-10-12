@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { summarize, hasAIKey } from './summarize.js';
 import { SECTIONS } from '../../web/lib/taxonomy.js';
 import { aiJobs, inSection } from './jobs.js';
 import { isSpoiler } from '../../web/lib/spoilers.js';
-import { foldStories, weeklyIndex } from './weekly.js';
+import { foldStories, readWeeks, writeWeeks } from './weekly.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const OUT = resolve(ROOT, 'web/data/news.json');
@@ -60,23 +60,8 @@ async function loadPrevious() {
 // Weekly archive (in Actions, restored from the cache by the workflow like news.json): the
 // stories of this edition join the week they started in. Returns a line for the log.
 async function updateWeekly(stories, now) {
-  const weeks = new Map();
-  const files = await readdir(WEEKLY).catch(() => []);
-  for (const f of files.filter((f) => /^\d{4}-W\d{2}\.json$/.test(f))) {
-    try {
-      const week = JSON.parse(await readFile(resolve(WEEKLY, f), 'utf8'));
-      weeks.set(week.id, week);
-    } catch {
-      /* a broken week file is rebuilt from this edition */
-    }
-  }
-  const changed = foldStories(weeks, stories, now);
-  await mkdir(WEEKLY, { recursive: true });
-  for (const id of changed) await writeFile(resolve(WEEKLY, `${id}.json`), JSON.stringify(weeks.get(id)));
-  for (const f of files) if (/^\d{4}-W\d{2}\.json$/.test(f) && !weeks.has(f.slice(0, -5))) await rm(resolve(WEEKLY, f), { force: true });
-  const index = weeklyIndex(weeks, now);
-  await writeFile(resolve(WEEKLY, 'index.json'), JSON.stringify(index));
-  return `${index.weeks.length} semanas (${index.weeks.map((w) => `${w.id} ${w.stories}`).join(', ')})`;
+  const weeks = await readWeeks(WEEKLY);
+  return writeWeeks(WEEKLY, weeks, foldStories(weeks, stories, now), now);
 }
 
 async function main() {

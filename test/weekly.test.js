@@ -97,3 +97,22 @@ test('old weeks are dropped and the index lists the newest first', () => {
   assert.equal(index.current, '2026-W41');
   assert.deepEqual(index.weeks.map((w) => [w.id, w.stories]), [['2026-W41', 1], ['2026-W40', 1]]);
 });
+
+test('readWeeks/writeWeeks round-trip and drop the files of weeks no longer kept', async () => {
+  const { mkdtemp, readdir, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { readWeeks, writeWeeks } = await import('../scripts/ingest/weekly.js');
+  const dir = await mkdtemp(join(tmpdir(), 'weekly-'));
+  try {
+    await writeFile(join(dir, '2026-W01.json'), JSON.stringify({ id: '2026-W01', start: '2025-12-29', end: '2026-01-04', stories: {}, top: {} }));
+    const weeks = await readWeeks(dir);
+    assert.deepEqual([...weeks.keys()], ['2026-W01']);
+    const changed = foldStories(weeks, [story('a', 3, ['ciencia'])], NOW); // also drops W01 (too old)
+    await writeWeeks(dir, weeks, changed, NOW);
+    assert.deepEqual((await readdir(dir)).sort(), ['2026-W41.json', 'index.json']);
+    assert.deepEqual([...(await readWeeks(dir)).keys()], ['2026-W41']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

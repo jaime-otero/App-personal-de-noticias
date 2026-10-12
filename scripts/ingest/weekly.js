@@ -8,6 +8,8 @@
 //
 // Files (web/data/weekly/): index.json lists the weeks; one <week>.json per week.
 
+import { readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { SECTIONS } from '../../web/lib/taxonomy.js';
 
 export const TOP_N = 10;
@@ -127,4 +129,29 @@ export function weeklyIndex(weeks, now = Date.now()) {
       .sort((a, b) => b.start.localeCompare(a.start))
       .map(({ id, start, end, updatedAt, stories }) => ({ id, start, end, updatedAt, stories: Object.keys(stories).length })),
   };
+}
+
+const WEEK_FILE = /^\d{4}-W\d{2}\.json$/;
+
+// The archive in `dir` as a Map week id → week (empty if there is none yet; a broken file is skipped
+// and its week rebuilt from what comes next).
+export async function readWeeks(dir) {
+  const weeks = new Map();
+  for (const f of (await readdir(dir).catch(() => [])).filter((f) => WEEK_FILE.test(f))) {
+    try {
+      const week = JSON.parse(await readFile(resolve(dir, f), 'utf8'));
+      weeks.set(week.id, week);
+    } catch {}
+  }
+  return weeks;
+}
+
+// Writes the weeks in `changed` and index.json, and deletes the files of weeks no longer kept.
+export async function writeWeeks(dir, weeks, changed, now = Date.now()) {
+  await mkdir(dir, { recursive: true });
+  for (const id of changed) if (weeks.has(id)) await writeFile(resolve(dir, `${id}.json`), JSON.stringify(weeks.get(id)));
+  for (const f of await readdir(dir)) if (WEEK_FILE.test(f) && !weeks.has(f.slice(0, -5))) await rm(resolve(dir, f), { force: true });
+  const index = weeklyIndex(weeks, now);
+  await writeFile(resolve(dir, 'index.json'), JSON.stringify(index));
+  return `${index.weeks.length} semanas (${index.weeks.map((w) => `${w.id} ${w.stories}`).join(', ')})`;
 }
