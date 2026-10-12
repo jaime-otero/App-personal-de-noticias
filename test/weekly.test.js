@@ -166,3 +166,17 @@ test('weeklyAIJobs does one week per run, the newest first', async () => {
   const ids = new Set(weeklyAIJobs(weeks, NOW).map((j) => j.weekId));
   assert.deepEqual([...ids], ['2026-W41']);
 });
+
+test('foldStories accepts stories from old editions without langs or sections', () => {
+  const weeks = new Map();
+  const old = story('old', 4, ['ciencia']);
+  delete old.langs;
+  const bare = story('bare', 2, []);
+  delete bare.langs;
+  delete bare.sections;
+  foldStories(weeks, [old, bare, story('new', 4, ['ciencia'])], NOW);
+  const w = weeks.get('2026-W41');
+  assert.deepEqual(w.stories.old.langs, ['es']);
+  assert.deepEqual(w.stories.bare.sections, []);
+  assert.deepEqual(w.top.all, ['old', 'new', 'bare']);
+});
