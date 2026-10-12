@@ -11,7 +11,7 @@ import { summarize, hasAIKey } from './summarize.js';
 import { SECTIONS } from '../../web/lib/taxonomy.js';
 import { aiJobs, inSection } from './jobs.js';
 import { isSpoiler } from '../../web/lib/spoilers.js';
-import { foldStories, readWeeks, writeWeeks } from './weekly.js';
+import { foldStories, readWeeks, writeWeeks, weeklyAIJobs, applyWeeklyAI } from './weekly.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const OUT = resolve(ROOT, 'web/data/news.json');
@@ -58,10 +58,29 @@ async function loadPrevious() {
 }
 
 // Weekly archive (in Actions, restored from the cache by the workflow like news.json): the
-// stories of this edition join the week they started in. Returns a line for the log.
-async function updateWeekly(stories, now) {
+// stories of this edition join the week they started in, and in AI runs the weeks that are due get
+// their "La semana en …" summaries (weekly.js decides which). Returns a line for the log.
+async function updateWeekly(stories, now, { ai }) {
   const weeks = await readWeeks(WEEKLY);
-  return writeWeeks(WEEKLY, weeks, foldStories(weeks, stories, now), now);
+  const changed = new Set(foldStories(weeks, stories, now));
+  const jobs = ai ? weeklyAIJobs(weeks, now) : [];
+  const results = await mapLimit(jobs, AI_CONCURRENCY, async (job) => {
+    try {
+      return await summarize(job.stories, { label: job.label, nba: job.nba, now, week: job.week });
+    } catch (err) {
+      console.warn(`⚠ Resumen IA semanal de "${job.label}" (${job.weekId}) no disponible: ${err.message.slice(0, 300)}`);
+      return null;
+    }
+  });
+  let done = 0;
+  jobs.forEach((job, i) => {
+    if (applyWeeklyAI(weeks, job, results[i], now)) {
+      changed.add(job.weekId);
+      done++;
+    }
+  });
+  const log = await writeWeeks(WEEKLY, weeks, changed, now);
+  return jobs.length ? `${log}; resúmenes IA semanales: ${done}/${jobs.length} (${[...new Set(jobs.map((j) => `${j.weekId}${j.final ? ' final' : ''}`))].join(', ')})` : log;
 }
 
 async function main() {
@@ -165,7 +184,7 @@ async function main() {
   else await rm(VECTORS, { force: true });
   let weeklyLog;
   try {
-    weeklyLog = await updateWeekly(stories, now);
+    weeklyLog = await updateWeekly(stories, now, { ai: !skipAI && hasAIKey() });
   } catch (err) {
     weeklyLog = `no actualizado: ${err.message}`;
   }

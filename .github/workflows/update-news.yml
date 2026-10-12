@@ -29,7 +29,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write # solo para guardar el archivo semanal en la rama datos (main la protege su regla)
   models: read # GitHub Models, la última IA de reserva (usa el GITHUB_TOKEN, sin clave aparte)
 
 concurrency:
@@ -41,7 +41,7 @@ jobs:
     # En push, solo la rama por defecto publica (cron y ejecución manual ya van sobre ella).
     if: github.event_name != 'push' || github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -115,6 +115,11 @@ jobs:
           path: web/data/weekly
           key: weekly-${{ github.run_id }}
           restore-keys: weekly-
+      # Las semanas que no estén en la caché (se perdió, o es más nueva que la rama) salen de la
+      # copia permanente de la rama datos.
+      - name: Completar el archivo semanal con la rama datos
+        if: env.FRESH != '1'
+        run: bash scripts/ci/datos.sh pull
       - name: Recuperar los embeddings anteriores
         if: env.FRESH != '1'
         uses: actions/cache@v6
@@ -124,7 +129,7 @@ jobs:
           restore-keys: embeddings-
       - name: Descargar feeds y generar resúmenes
         if: env.FRESH != '1'
-        timeout-minutes: 6
+        timeout-minutes: 8 # una vez al día se suman los resúmenes IA de la semana (9 llamadas más)
         run: npm run ingest
         env:
           GEMINI_API_KEY: ${{ inputs.ai_provider != 'groq' && inputs.ai_provider != 'github' && secrets.GEMINI_API_KEY || '' }}
@@ -155,3 +160,9 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: '4'
           command: deploy
+      # Copia permanente del archivo semanal, una vez al día (la caché guarda la de cada 30 min). Si
+      # falla, la web ya está publicada y la siguiente ejecución lo vuelve a intentar.
+      - name: Guardar el archivo semanal en la rama datos
+        if: env.FRESH != '1'
+        continue-on-error: true
+        run: bash scripts/ci/datos.sh push 20

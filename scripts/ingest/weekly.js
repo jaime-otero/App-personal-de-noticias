@@ -11,6 +11,7 @@
 import { readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { SECTIONS } from '../../web/lib/taxonomy.js';
+import { isNbaStory } from '../../web/lib/spoilers.js';
 
 export const TOP_N = 10;
 export const TOP_ALL = 20;
@@ -129,6 +130,66 @@ export function weeklyIndex(weeks, now = Date.now()) {
       .sort((a, b) => b.start.localeCompare(a.start))
       .map(({ id, start, end, updatedAt, stories }) => ({ id, start, end, updatedAt, stories: Object.keys(stories).length })),
   };
+}
+
+// ---------- weekly AI summaries ----------
+//
+// "La semana en …" for Para ti, every section and the NBA (without results). A week still open gets
+// a provisional summary once a day; when it closes (Tuesday: stories started on Sunday can still
+// gain outlets on Monday) it gets the final one, which never changes again.
+
+export const AI_KEYS = [
+  { key: 'all', label: 'Portada', nba: false },
+  ...SECTIONS.map((s) => ({ key: s.id, label: s.label, nba: false })),
+  { key: 'eeuu/nba', label: 'NBA', nba: true },
+];
+const PROVISIONAL_EVERY = 20 * 3.6e6;
+const MAX_WEEKS_PER_RUN = 1; // 9 calls at most: a run with AI already takes ~4 of its 8 minutes
+const AI_STORIES = 12;
+
+export const isClosed = (week, now) => now >= Date.parse(week.end) + 2 * 864e5;
+
+// [{ weekId, key, label, nba, final, week: {start, end}, stories }], newest week first. Spoilers never
+// reach the model and NBA stories only go to the NBA call, as in the daily summaries (jobs.js).
+export function weeklyAIJobs(weeks, now = Date.now()) {
+  const jobs = [];
+  let n = 0;
+  for (const week of [...weeks.values()].sort((a, b) => b.start.localeCompare(a.start))) {
+    const final = isClosed(week, now);
+    const due = AI_KEYS.filter(({ key }) => {
+      const b = week.briefings?.[key];
+      return final ? !b?.final : !b || now - Date.parse(b.at) > PROVISIONAL_EVERY;
+    });
+    const weekJobs = due
+      .map(({ key, label, nba }) => {
+        const stories = (week.top[key] ?? [])
+          .map((id) => week.stories[id])
+          .filter((s) => s && !s.spoiler && (nba || !isNbaStory(s)))
+          .slice(0, AI_STORIES);
+        return { weekId: week.id, key, label, nba, final, week: { start: week.start, end: week.end }, stories };
+      })
+      .filter((j) => j.stories.length >= 2);
+    if (!weekJobs.length) continue;
+    jobs.push(...weekJobs);
+    if (++n === MAX_WEEKS_PER_RUN) break;
+  }
+  return jobs;
+}
+
+// Stores a job's answer: the week's summary for that key, and a summary for its stories that had none.
+export function applyWeeklyAI(weeks, job, ai, now = Date.now()) {
+  const week = weeks.get(job.weekId);
+  if (!week || !ai?.briefing) return false;
+  week.briefings ??= {};
+  week.briefings[job.key] = { text: ai.briefing, at: new Date(now).toISOString(), model: ai.model, ...(job.final && { final: true }) };
+  for (const [id, text] of Object.entries(ai.summaries ?? {})) {
+    const story = week.stories[id];
+    if (story && !story.aiSummary) {
+      story.aiSummary = text;
+      delete story.summary;
+    }
+  }
+  return true;
 }
 
 const WEEK_FILE = /^\d{4}-W\d{2}\.json$/;

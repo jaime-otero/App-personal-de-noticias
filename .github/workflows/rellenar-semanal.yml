@@ -3,7 +3,8 @@ name: Rellenar archivo semanal
 # A mano (Actions → Rellenar archivo semanal → Run workflow). Rellena la vista Semana con las
 # ediciones anteriores que cada ejecución de "Actualizar noticias" dejó en la caché de Actions
 # (news-<run_id>): sirve para los días previos a que existiera el archivo semanal o si su caché se
-# pierde. La siguiente ejecución de "Actualizar noticias" recoge el resultado y lo publica.
+# pierde. Guarda el resultado en la caché y en la rama datos; la siguiente ejecución de
+# "Actualizar noticias" lo recoge y lo publica.
 
 on:
   workflow_dispatch:
@@ -16,7 +17,7 @@ on:
         default: '6'
 
 permissions:
-  contents: read
+  contents: write # guardar el resultado en la rama datos
   actions: read # listar las cachés
 
 # La misma cola que "Actualizar noticias": así no guardan el archivo semanal a la vez.
@@ -100,4 +101,6 @@ jobs:
         with:
           pattern: news-*
           path: ediciones
+      - run: bash scripts/ci/datos.sh pull
       - run: node scripts/ingest/backfill-weekly.js ediciones/*/news.json
+      - run: bash scripts/ci/datos.sh push 0

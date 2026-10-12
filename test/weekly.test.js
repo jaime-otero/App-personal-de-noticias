@@ -116,3 +116,53 @@ test('readWeeks/writeWeeks round-trip and drop the files of weeks no longer kept
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('weeklyAIJobs: provisional once a day while the week is open, final once when it closes', async () => {
+  const { weeklyAIJobs, applyWeeklyAI } = await import('../scripts/ingest/weekly.js');
+  const weeks = new Map();
+  foldStories(weeks, [
+    story('a', 6, ['espana/politica']),
+    story('b', 4, ['espana/economia']),
+    story('n1', 5, ['eeuu/nba']),
+    story('n2', 3, ['eeuu/nba'], undefined, { spoiler: true }),
+    story('n3', 2, ['eeuu/nba']),
+  ], NOW);
+  const jobs = weeklyAIJobs(weeks, NOW);
+  const byKey = Object.fromEntries(jobs.map((j) => [j.key, j]));
+  // Only keys with 2+ stories: Para ti, España and the NBA.
+  assert.deepEqual(Object.keys(byKey).sort(), ['all', 'eeuu/nba', 'espana']);
+  assert.equal(byKey.all.final, false); // Sunday: the week is still open
+  assert.deepEqual(byKey.all.stories.map((s) => s.id), ['a', 'b']); // NBA stories only in the NBA call
+  assert.deepEqual(byKey['eeuu/nba'].stories.map((s) => s.id), ['n1', 'n3']); // no spoilers to the model
+  assert.equal(byKey['eeuu/nba'].nba, true);
+  assert.deepEqual(byKey.all.week, { start: '2026-10-05', end: '2026-10-11' });
+
+  for (const j of jobs) applyWeeklyAI(weeks, j, { briefing: `Resumen ${j.key}`, summaries: { a: 'IA de a' }, model: 'm' }, NOW);
+  const w = weeks.get('2026-W41');
+  assert.equal(w.briefings.espana.text, 'Resumen espana');
+  assert.equal(w.briefings.espana.final, undefined);
+  assert.equal(w.stories.a.aiSummary, 'IA de a');
+  assert.equal(w.stories.a.summary, undefined);
+
+  // Same day: nothing due. Next day (Monday, not closed yet): provisional again.
+  assert.equal(weeklyAIJobs(weeks, NOW + 3 * 3.6e6).length, 0);
+  const monday = NOW + 21 * 3.6e6;
+  assert.ok(weeklyAIJobs(weeks, monday).every((j) => !j.final));
+  // Tuesday: final, then never again.
+  const tuesday = Date.parse('2026-10-13T08:00:00Z');
+  const final = weeklyAIJobs(weeks, tuesday);
+  assert.ok(final.length === 3 && final.every((j) => j.final));
+  for (const j of final) applyWeeklyAI(weeks, j, { briefing: 'Final', summaries: {}, model: 'm' }, tuesday);
+  assert.equal(w.briefings.all.final, true);
+  assert.equal(weeklyAIJobs(weeks, tuesday + 5 * 864e5).length, 0);
+  // A failed call leaves the briefing as it was, so it is retried.
+  assert.equal(applyWeeklyAI(weeks, final[0], null, tuesday), false);
+});
+
+test('weeklyAIJobs does one week per run, the newest first', async () => {
+  const { weeklyAIJobs } = await import('../scripts/ingest/weekly.js');
+  const weeks = new Map();
+  foldStories(weeks, [story('a', 3, ['ciencia']), story('b', 2, ['ciencia']), story('c', 3, ['ciencia'], '2026-10-01T10:00:00Z'), story('d', 2, ['ciencia'], '2026-10-01T11:00:00Z')], NOW);
+  const ids = new Set(weeklyAIJobs(weeks, NOW).map((j) => j.weekId));
+  assert.deepEqual([...ids], ['2026-W41']);
+});
