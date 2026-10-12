@@ -1,6 +1,7 @@
-// App shell: stale-while-revalidate (instant load, updates picked up on the next visit). News data: network-first with the cached copy as offline fallback.
+// App shell: stale-while-revalidate (instant load, updates picked up on the next visit). News data and the
+// weekly archive: network-first with the cached copy as offline fallback.
 // Pages: network-first, so a logged-out visit reaches the login redirect instead of a cached shell.
-const VERSION = 'v9';
+const VERSION = 'v10';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'lib/profile.js', 'lib/rank.js', 'lib/tokens.js', 'lib/taxonomy.js', 'lib/spoilers.js', 'lib/corrections.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
@@ -22,17 +23,19 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.includes('/api/')) return;
   if (url.pathname.endsWith('/data/meta.json')) return; // always from the network
-  if (url.pathname.endsWith('/data/news.json')) {
+  // The edition and the weekly archive (data/weekly/*.json).
+  const data = url.pathname.match(/\/(data\/(?:news|weekly\/[\w-]+)\.json)$/)?.[1];
+  if (data) {
     e.respondWith(
       fetch(e.request)
         .then((res) => {
           if (res.ok) {
             const copy = res.clone();
-            caches.open('data').then((c) => c.put('data/news.json', copy));
+            caches.open('data').then((c) => c.put(data, copy));
           }
           return res;
         })
-        .catch(() => caches.match('data/news.json')),
+        .catch(() => caches.match(data, { cacheName: 'data' })),
     );
     return;
   }

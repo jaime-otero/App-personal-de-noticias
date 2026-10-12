@@ -6,3 +6,4 @@ web/data/meta.json
 .dev.vars
 .cache/
 web/data/vectors.json
+web/data/weekly/

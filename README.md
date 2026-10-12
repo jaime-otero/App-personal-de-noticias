@@ -15,6 +15,7 @@ Cron del Worker de Cloudflare → GitHub Actions (cada 30 min de 7 a 1 h, dos ve
        4. agrupa la misma noticia entre medios y entre español e inglés, y marca spoilers de la NBA
        5. Gemini (gratis; de reserva Groq y GitHub Models): un briefing por sección + resúmenes de sus noticias top
        6. escribe web/data/news.json (y los vectores de las noticias en web/data/vectors.json)
+       7. añade las noticias al archivo semanal (web/data/weekly/: las más importantes de cada semana)
   └─ despliega en Cloudflare Workers: web/ (assets) + src/worker.js (API de sincronización, KV)
 
 Navegador (web/)
@@ -27,6 +28,7 @@ Navegador (web/)
 | `sources.json` | Medios y feeds, cada uno con su sección por defecto (añadir/quitar fuentes aquí) |
 | `web/lib/taxonomy.js` | Secciones, subsecciones y palabras clave para clasificar |
 | `web/lib/spoilers.js` | Detector de resultados de la NBA |
+| `scripts/ingest/weekly.js` | Archivo semanal (el modo *Semana* de cada feed): las noticias más importantes de cada semana, por sección y subsección |
 | `scripts/ci/freshness.js` | Edad de la última edición (la usan *Actualizar noticias* y *Vigilar noticias*) |
 | `src/worker.js` | Worker: sirve la web y guarda el perfil sincronizado (KV) |
 | `scripts/ingest/` | Descarga, parseo, clasificación, agrupación y resúmenes IA (`jobs.js` decide qué noticias van a cada llamada; `embed.js`, los embeddings; `prototypes.js`, los prototipos de sección) |
@@ -115,6 +117,14 @@ Cada artículo (titular + extracto) se convierte en un vector con [`paraphrase-m
 Para ti · España (Política, Economía, Sociedad, Deportes, Cultura) · EE. UU. (Política, Economía, Sociedad, NBA, NFL, Deporte universitario) · Internacional (Europa, Latinoamérica, Oriente Medio, Asia y otros) · Ciencia (Física, Espacio, Vida y salud, Clima) · Tecnología (IA, Empresas y gadgets, Innovación) · Economía (Mercados, Empresas, Energía) · Deportes (Fútbol, Baloncesto, Tenis, Fútbol americano, Rugby, Béisbol, Deportes de invierno, Atletismo, Ciclismo, Resistencia, Motor, Combate, Deportes acuáticos, Otros).
 
 Cada sección tiene su resumen IA arriba (y la NBA uno propio, sin resultados). Las rutas se pueden enlazar: `#/s/eeuu/nba`.
+
+## Ahora / Semana
+
+Arriba de cada feed (Para ti, cada sección y cada subsección) hay un interruptor **Ahora | Semana**. *Ahora* es el feed de siempre; *Semana* enseña las noticias más importantes de la semana en ese mismo feed (de lunes a domingo, hora de España): las 20 primeras en Para ti y las 10 primeras de cada sección y subsección. Con ‹ › se pasa a semanas anteriores; se guardan las últimas 12. El modo se mantiene al cambiar de sección y la web siempre abre en *Ahora*.
+
+- **Importancia** = el máximo de medios que llegaron a cubrir la noticia en alguna edición (y, a igualdad, si se contó en español e inglés). No se personaliza el orden, pero sí se quitan las noticias ocultas, los medios silenciados, las palabras silenciadas y los idiomas que no lees.
+- Cada noticia cuenta en la semana en que salió su primer artículo; la semana en curso se va completando con cada edición. Se conserva su resumen IA y los spoilers de la NBA siguen tapados.
+- Se guarda en `web/data/weekly/` (un archivo por semana más `index.json`), que el workflow conserva en la caché de Actions como la edición anterior. Si esa caché se pierde (GitHub la borra tras 7 días sin usarse), el archivo empieza de nuevo desde la semana en curso.
 
 ## Cómo aprende
 

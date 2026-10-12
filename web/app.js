@@ -1,12 +1,12 @@
 import { loadProfile, saveProfile, pruneProfile, defaultProfile, migrate, isOn, listOf, setFlag, toRemote, mergeProfiles, orderedSections, moveSection } from './lib/profile.js';
-import { rankStories, sortEntries, SORTS, train, topFeatures, featureLabel, sectionPref, emptyModel } from './lib/rank.js';
+import { rankStories, sortEntries, SORTS, train, topFeatures, featureLabel, sectionPref, scoreStory, emptyModel } from './lib/rank.js';
 import { SECTIONS, SECTION_BY_ID, sectionLabel } from './lib/taxonomy.js';
 import { isSpoiler } from './lib/spoilers.js';
 import { applyCorrections, setCorrection, clearCorrection, listCorrections } from './lib/corrections.js';
 
 const PAGE = 30;
 const SESSION = Date.now();
-const state = { data: null, profile: pruneProfile(loadProfile()), account: null, route: { view: 'foryou' }, limit: PAGE, revealed: new Set() };
+const state = { data: null, profile: pruneProfile(loadProfile()), account: null, route: { view: 'foryou' }, limit: PAGE, revealed: new Set(), weekly: { index: null, weeks: new Map(), week: null } };
 const $main = document.getElementById('main');
 const $tabs = document.getElementById('tabs');
 const $subtabs = document.getElementById('subtabs');
@@ -187,6 +187,7 @@ function showNewEdition() {
       if (!res.ok) throw new Error(res.status);
       state.data = await res.json();
       state.limit = PAGE;
+      state.weekly = { index: null, weeks: new Map(), week: state.weekly.week };
       showUpdated();
       render();
       window.scrollTo({ top: 0 });
@@ -202,7 +203,8 @@ function showNewEdition() {
 setInterval(showUpdated, 60e3);
 setInterval(checkForUpdate, CHECK_EVERY);
 
-const findStory = (id) => state.data?.stories.find((s) => s.id === id) ?? state.profile.liked[id]?.d ?? state.profile.saved[id]?.d;
+const findStory = (id) =>
+  state.data?.stories.find((s) => s.id === id) ?? state.weekly.weeks.get(state.weekly.week)?.stories[id] ?? state.profile.liked[id]?.d ?? state.profile.saved[id]?.d;
 const inSection = (story, key) => (story.sections ?? []).some((s) => s === key || s.startsWith(`${key}/`));
 
 // ---------- views ----------
@@ -248,11 +250,14 @@ function storyCard(entry) {
   const p = state.profile;
   const [first, ...rest] = story.sources;
   const read = p.read[story.id] ? ' read' : '';
+  // Weekly archive stories keep a few outlets and the peak count (n); the date says more than "hace 4 días".
+  const more = (story.n ?? story.sources.length) - 1;
+  const when = story.n != null ? dayLabel(story.publishedAt) : timeAgo(story.publishedAt);
 
   if (p.spoilers.nba && !state.revealed.has(story.id) && isSpoiler(story, p.spoilers.extra)) {
     return `<article class="card spoiler" data-id="${esc(story.id)}">
       <div class="body">
-        <p class="meta"><strong>${esc(first.source)}</strong> · ${timeAgo(story.publishedAt)} <span class="chip">NBA</span></p>
+        <p class="meta"><strong>${esc(first.source)}</strong> · ${when} <span class="chip">NBA</span></p>
         <p class="spoiler-msg">🙈 Posible spoiler de la NBA</p>
         <div class="actions"><button data-act="reveal">Mostrar</button><button data-act="hide">Ocultar</button></div>
       </div>
@@ -279,7 +284,7 @@ function storyCard(entry) {
   return `<article class="card${read}" data-id="${esc(story.id)}">
     ${story.image ? `<img class="thumb" src="${esc(safeUrl(story.image))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
     <div class="body">
-      <p class="meta"><strong>${esc(first.source)}</strong>${rest.length ? ` <span class="coverage">+${rest.length}</span>` : ''} · ${timeAgo(story.publishedAt)} ${chipsFor(story)}</p>
+      <p class="meta"><strong>${esc(first.source)}</strong>${more > 0 ? ` <span class="coverage" title="Llegó a cubrirla ${more + 1} medios">+${more}</span>` : ''} · ${when} ${chipsFor(story)}</p>
       <h2><a href="${esc(safeUrl(first.url))}" target="_blank" rel="noopener" data-open="${esc(story.id)}">${esc(story.title)}</a></h2>
       ${text}
       ${why}
@@ -319,6 +324,15 @@ let sortMode = (() => {
   }
 })();
 
+// Every feed (Para ti, sections, subsections) shows either the latest stories or the most important
+// ones of a week. Per visit: the app always opens on "Ahora".
+let feedMode = 'now';
+
+const modeBar = () =>
+  `<div class="modebar" role="group" aria-label="Qué noticias ver">${[['now', 'Ahora'], ['week', 'Semana']]
+    .map(([id, label]) => `<button data-mode="${id}" aria-pressed="${feedMode === id}">${label}</button>`)
+    .join('')}</div>`;
+
 function feedHtml(ranked, emptyMsg) {
   const bar = `<div class="sortbar" role="group" aria-label="Ordenar noticias"><span class="muted small">Ordenar:</span>${SORTS.map(
     ([id, label]) => `<button data-sort="${id}" aria-pressed="${sortMode === id}">${label}</button>`,
@@ -340,9 +354,84 @@ function sectionView() {
   const { sec, sub } = state.route;
   const key = sub ? `${sec}/${sub}` : sec;
   const s = SECTION_BY_ID[sec];
+  if (feedMode === 'week') return modeBar() + weeklyView(key);
   const briefing = !sub ? briefingHtml(sec, `Lo importante · ${s.label}`) : key === 'eeuu/nba' ? briefingHtml(key, 'Lo importante · NBA (sin resultados)') : '';
   const stories = state.data.stories.filter((st) => inSection(st, key));
-  return briefing + feedHtml(rankStories(stories, state.profile), 'No hay noticias de esta sección ahora mismo.');
+  return modeBar() + briefing + feedHtml(rankStories(stories, state.profile), 'No hay noticias de esta sección ahora mismo.');
+}
+
+// ---------- weekly archive ----------
+
+const dayFmt = new Intl.DateTimeFormat('es', { weekday: 'short', day: 'numeric', month: 'short' });
+const dayLabel = (iso) => (iso ? dayFmt.format(new Date(iso)) : '');
+
+// "Del 5 al 11 de octubre" / "Del 28 de septiembre al 4 de octubre" (start and end are YYYY-MM-DD).
+function weekLabel(w) {
+  const d = (ymd) => new Date(`${ymd}T12:00:00Z`);
+  const [a, b] = [d(w.start), d(w.end)];
+  const month = (x) => x.toLocaleDateString('es', { month: 'long', timeZone: 'UTC' });
+  const year = a.getUTCFullYear() !== new Date().getFullYear() ? ` de ${a.getUTCFullYear()}` : '';
+  return a.getUTCMonth() === b.getUTCMonth()
+    ? `Del ${a.getUTCDate()} al ${b.getUTCDate()} de ${month(b)}${year}`
+    : `Del ${a.getUTCDate()} de ${month(a)} al ${b.getUTCDate()} de ${month(b)}${year}`;
+}
+
+// Fetches the list of weeks and the chosen week the first time the tab is opened, then renders.
+function loadWeekly() {
+  state.weekly.loading ??= fetchWeekly().finally(() => {
+    state.weekly.loading = null;
+    if (feedMode === 'week') render();
+  });
+}
+
+async function fetchWeekly() {
+  const wk = state.weekly;
+  try {
+    if (!wk.index) {
+      const res = await fetch('data/weekly/index.json', { cache: 'no-cache' });
+      if (res.status === 401) return goLogin();
+      if (res.status === 404) wk.index = { weeks: [] };
+      else if (!res.ok) throw new Error(res.status);
+      else wk.index = await res.json();
+      if (!wk.index.weeks.some((w) => w.id === wk.week)) wk.week = wk.index.weeks[0]?.id ?? null;
+    }
+    if (wk.week && !wk.weeks.has(wk.week)) {
+      const res = await fetch(`data/weekly/${wk.week}.json`, { cache: 'no-cache' });
+      if (!res.ok) throw new Error(res.status);
+      wk.weeks.set(wk.week, await res.json());
+    }
+    wk.error = false;
+  } catch {
+    wk.error = true;
+  }
+}
+
+// key: 'all' (Para ti), a section or a subsection.
+function weeklyView(key) {
+  const wk = state.weekly;
+  if (wk.error) return `<div class="empty"><p>No se han podido cargar las noticias de la semana.</p><div class="actions center-row"><button data-act="weekly-retry">Reintentar</button></div></div>`;
+  if (!wk.index || (wk.week && !wk.weeks.has(wk.week))) {
+    loadWeekly();
+    return '<p class="muted center">Cargando la semana…</p>';
+  }
+  if (!wk.index.weeks.length) return '<div class="empty"><p>Todavía no hay noticias de la semana.</p><p class="muted">Se irán guardando con cada edición: aquí quedarán las más importantes de cada semana.</p></div>';
+
+  const weeks = wk.index.weeks; // newest first
+  const i = weeks.findIndex((w) => w.id === wk.week);
+  const w = weeks[i];
+  const nav = `<div class="weeknav">
+    <button data-act="week" data-week="${esc(weeks[i + 1]?.id ?? '')}"${weeks[i + 1] ? '' : ' disabled'} aria-label="Semana anterior">‹</button>
+    <div><strong>${esc(weekLabel(w))}</strong><span class="muted small">${w.id === wk.index.current ? 'Semana en curso: se actualiza con cada edición' : 'Las noticias que más medios cubrieron'}</span></div>
+    <button data-act="week" data-week="${esc(weeks[i - 1]?.id ?? '')}"${i > 0 ? '' : ' disabled'} aria-label="Semana siguiente">›</button>
+  </div>`;
+
+  // The objective order (peak coverage), only leaving out what the person has hidden or filtered.
+  const week = wk.weeks.get(wk.week);
+  const stories = (week.top[key] ?? []).map((id) => week.stories[id]).filter((st) => st && scoreStory(st, state.profile));
+  const list = stories.length
+    ? `<ol class="list ranked">${stories.map((st) => `<li>${storyCard(st)}</li>`).join('')}</ol>`
+    : '<div class="empty"><p>No hay noticias de esta sección esta semana.</p></div>';
+  return nav + list;
 }
 
 function settingsHtml() {
@@ -433,7 +522,8 @@ function render() {
   const p = state.profile;
   const v = state.route.view;
   let html;
-  if (v === 'foryou') html = briefingHtml('portada', 'Lo importante ahora') + feedHtml(rankStories(state.data.stories, p, Date.now(), { explore: true }), 'No hay noticias que encajen con tus filtros.');
+  if (v === 'foryou' && feedMode === 'week') html = modeBar() + weeklyView('all');
+  else if (v === 'foryou') html = modeBar() + briefingHtml('portada', 'Lo importante ahora') + feedHtml(rankStories(state.data.stories, p, Date.now(), { explore: true }), 'No hay noticias que encajen con tus filtros.');
   else if (v === 'section') html = sectionView();
   else if (v === 'megusta') html = listHtml(listOf(p.liked), 'Aún no has marcado ninguna noticia con ❤️. Cada me gusta enseña a la web lo que te interesa.');
   else if (v === 'guardados') html = listHtml(listOf(p.saved), 'Aún no has guardado noticias.');
@@ -470,6 +560,12 @@ $main.addEventListener('click', (e) => {
       link.closest('.card')?.classList.add('read');
     }
     return;
+  }
+  const mode = e.target.closest('[data-mode]');
+  if (mode) {
+    feedMode = mode.dataset.mode;
+    state.limit = PAGE;
+    return render();
   }
   const sort = e.target.closest('[data-sort]');
   if (sort) {
@@ -528,6 +624,15 @@ $main.addEventListener('click', (e) => {
     return render();
   }
   if (act === 'copy-reclass') return copyCorrections();
+  if (act === 'week' && btn.dataset.week) {
+    state.weekly.week = btn.dataset.week;
+    render();
+    return window.scrollTo({ top: 0 });
+  }
+  if (act === 'weekly-retry') {
+    state.weekly.error = false;
+    return render();
+  }
 
   const card = btn.closest('.card');
   const story = card && findStory(card.dataset.id);
@@ -556,7 +661,7 @@ $main.addEventListener('click', (e) => {
   }
   persist();
   const leaves = act === 'hide' || act === 'dislike' || (state.route.view === 'megusta' && act === 'like') || (state.route.view === 'guardados' && act === 'save');
-  if (leaves) card.remove();
+  if (leaves) (card.parentElement.tagName === 'LI' ? card.parentElement : card).remove();
   else rerenderCard(card, story);
 });
 
@@ -627,7 +732,7 @@ function observeCards() {
   observer?.disconnect();
   timers.forEach(clearTimeout);
   timers.clear();
-  if (!['foryou', 'section'].includes(state.route.view) || !('IntersectionObserver' in window)) return;
+  if (!['foryou', 'section'].includes(state.route.view) || feedMode === 'week' || !('IntersectionObserver' in window)) return;
   observer = new IntersectionObserver(
     (entries) => {
       for (const en of entries) {
