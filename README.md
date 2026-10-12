@@ -28,7 +28,7 @@ Navegador (web/)
 | `sources.json` | Medios y feeds, cada uno con su sección por defecto (añadir/quitar fuentes aquí) |
 | `web/lib/taxonomy.js` | Secciones, subsecciones y palabras clave para clasificar |
 | `web/lib/spoilers.js` | Detector de resultados de la NBA |
-| `scripts/ingest/weekly.js` | Archivo semanal (pestaña 📅 Semanal): las noticias más importantes de cada semana, por sección y subsección |
+| `scripts/ingest/weekly.js` | Archivo semanal (el modo *Semana* de cada feed): las noticias más importantes de cada semana, por sección y subsección |
 | `scripts/ci/freshness.js` | Edad de la última edición (la usan *Actualizar noticias* y *Vigilar noticias*) |
 | `src/worker.js` | Worker: sirve la web y guarda el perfil sincronizado (KV) |
 | `scripts/ingest/` | Descarga, parseo, clasificación, agrupación y resúmenes IA (`jobs.js` decide qué noticias van a cada llamada; `embed.js`, los embeddings; `prototypes.js`, los prototipos de sección) |
@@ -118,9 +118,9 @@ Para ti · España (Política, Economía, Sociedad, Deportes, Cultura) · EE. UU
 
 Cada sección tiene su resumen IA arriba (y la NBA uno propio, sin resultados). Las rutas se pueden enlazar: `#/s/eeuu/nba`.
 
-## Semanal
+## Ahora / Semana
 
-La pestaña **📅 Semanal** guarda las noticias más importantes de cada semana (de lunes a domingo, hora de España): las 20 primeras del diario entero y las 10 primeras de cada sección y subsección, con las mismas pestañas que los feeds normales (`#/semanal/deportes/tenis`). Con ‹ › se pasa a semanas anteriores; se guardan las últimas 12.
+Arriba de cada feed (Para ti, cada sección y cada subsección) hay un interruptor **Ahora | Semana**. *Ahora* es el feed de siempre; *Semana* enseña las noticias más importantes de la semana en ese mismo feed (de lunes a domingo, hora de España): las 20 primeras en Para ti y las 10 primeras de cada sección y subsección. Con ‹ › se pasa a semanas anteriores; se guardan las últimas 12. El modo se mantiene al cambiar de sección y la web siempre abre en *Ahora*.
 
 - **Importancia** = el máximo de medios que llegaron a cubrir la noticia en alguna edición (y, a igualdad, si se contó en español e inglés). No se personaliza el orden, pero sí se quitan las noticias ocultas, los medios silenciados, las palabras silenciadas y los idiomas que no lees.
 - Cada noticia cuenta en la semana en que salió su primer artículo; la semana en curso se va completando con cada edición. Se conserva su resumen IA y los spoilers de la NBA siguen tapados.

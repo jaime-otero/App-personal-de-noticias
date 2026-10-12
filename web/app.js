@@ -48,7 +48,6 @@ function parseRoute() {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
   const [view, sec, sub] = h.split('/');
   if (view === 's' && SECTION_BY_ID[sec]) return { view: 'section', sec, sub: SECTION_BY_ID[sec].subs.some((s) => s.id === sub) ? sub : null };
-  if (view === 'semanal') return SECTION_BY_ID[sec] ? { view, sec, sub: SECTION_BY_ID[sec].subs.some((s) => s.id === sub) ? sub : null } : { view };
   if (['megusta', 'guardados', 'ajustes'].includes(view)) return { view };
   return { view: 'foryou' };
 }
@@ -210,20 +209,16 @@ const inSection = (story, key) => (story.sections ?? []).some((s) => s === key |
 
 // ---------- views ----------
 
-const href = (route) => {
-  const path = route.sec ? `/${route.sec}${route.sub ? `/${route.sub}` : ''}` : '';
-  if (route.view === 'section') return `#/s${path}`;
-  return route.view === 'foryou' ? '#/' : `#/${route.view}${path}`;
-};
+const href = (route) => (route.view === 'section' ? `#/s/${route.sec}${route.sub ? `/${route.sub}` : ''}` : route.view === 'foryou' ? '#/' : `#/${route.view}`);
 
 function tabsHtml() {
   const r = state.route;
   const tabs = [[{ view: 'foryou' }, 'Para ti']];
   for (const s of orderedSections(state.profile)) if (sectionPref(state.profile, s.id) > -2) tabs.push([{ view: 'section', sec: s.id }, s.label]);
-  tabs.push([{ view: 'semanal' }, '📅 Semanal'], [{ view: 'megusta' }, '❤️ Me gusta'], [{ view: 'guardados' }, 'Guardados'], [{ view: 'ajustes' }, 'Ajustes']);
+  tabs.push([{ view: 'megusta' }, '❤️ Me gusta'], [{ view: 'guardados' }, 'Guardados'], [{ view: 'ajustes' }, 'Ajustes']);
   return tabs
     .map(([route, label]) => {
-      const active = route.view === r.view && (route.sec === r.sec || r.view === 'semanal');
+      const active = route.view === r.view && route.sec === r.sec;
       return `<a class="tab${active ? ' active' : ''}" href="${href(route)}"${active ? ' aria-current="page"' : ''}>${esc(label)}</a>`;
     })
     .join('');
@@ -231,12 +226,6 @@ function tabsHtml() {
 
 function subtabsHtml() {
   const r = state.route;
-  if (r.view === 'semanal') {
-    const secs = orderedSections(state.profile).filter((s) => sectionPref(state.profile, s.id) > -2);
-    return [{ id: undefined, label: 'Todo' }, ...secs]
-      .map((s) => `<a class="subtab${r.sec === s.id ? ' active' : ''}" href="${href({ view: 'semanal', sec: s.id })}">${esc(s.label)}</a>`)
-      .join('');
-  }
   if (r.view !== 'section') return '';
   const sec = orderedSections(state.profile).find((s) => s.id === r.sec);
   const subs = sec.subs.filter((s) => sectionPref(state.profile, s.key) > -2);
@@ -248,7 +237,7 @@ function subtabsHtml() {
 // Section chips, skipping the one being browsed; other sections' subsections name their parent.
 function chipsFor(story) {
   const r = state.route;
-  const current = r.view === 'section' || r.view === 'semanal' ? (r.sub ? `${r.sec}/${r.sub}` : r.sec) : null;
+  const current = r.view === 'section' ? (r.sub ? `${r.sec}/${r.sub}` : r.sec) : null;
   return (story.sections ?? [])
     .filter((k) => k !== current)
     .slice(0, 2)
@@ -261,9 +250,9 @@ function storyCard(entry) {
   const p = state.profile;
   const [first, ...rest] = story.sources;
   const read = p.read[story.id] ? ' read' : '';
-  // The weekly archive keeps a few outlets and the peak count (n); the date matters more than "hace 4 días".
+  // Weekly archive stories keep a few outlets and the peak count (n); the date says more than "hace 4 días".
   const more = (story.n ?? story.sources.length) - 1;
-  const when = state.route.view === 'semanal' ? dayLabel(story.publishedAt) : timeAgo(story.publishedAt);
+  const when = story.n != null ? dayLabel(story.publishedAt) : timeAgo(story.publishedAt);
 
   if (p.spoilers.nba && !state.revealed.has(story.id) && isSpoiler(story, p.spoilers.extra)) {
     return `<article class="card spoiler" data-id="${esc(story.id)}">
@@ -335,6 +324,15 @@ let sortMode = (() => {
   }
 })();
 
+// Every feed (Para ti, sections, subsections) shows either the latest stories or the most important
+// ones of a week. Per visit: the app always opens on "Ahora".
+let feedMode = 'now';
+
+const modeBar = () =>
+  `<div class="modebar" role="group" aria-label="Qué noticias ver">${[['now', 'Ahora'], ['week', 'Semana']]
+    .map(([id, label]) => `<button data-mode="${id}" aria-pressed="${feedMode === id}">${label}</button>`)
+    .join('')}</div>`;
+
 function feedHtml(ranked, emptyMsg) {
   const bar = `<div class="sortbar" role="group" aria-label="Ordenar noticias"><span class="muted small">Ordenar:</span>${SORTS.map(
     ([id, label]) => `<button data-sort="${id}" aria-pressed="${sortMode === id}">${label}</button>`,
@@ -356,9 +354,10 @@ function sectionView() {
   const { sec, sub } = state.route;
   const key = sub ? `${sec}/${sub}` : sec;
   const s = SECTION_BY_ID[sec];
+  if (feedMode === 'week') return modeBar() + weeklyView(key);
   const briefing = !sub ? briefingHtml(sec, `Lo importante · ${s.label}`) : key === 'eeuu/nba' ? briefingHtml(key, 'Lo importante · NBA (sin resultados)') : '';
   const stories = state.data.stories.filter((st) => inSection(st, key));
-  return briefing + feedHtml(rankStories(stories, state.profile), 'No hay noticias de esta sección ahora mismo.');
+  return modeBar() + briefing + feedHtml(rankStories(stories, state.profile), 'No hay noticias de esta sección ahora mismo.');
 }
 
 // ---------- weekly archive ----------
@@ -381,7 +380,7 @@ function weekLabel(w) {
 function loadWeekly() {
   state.weekly.loading ??= fetchWeekly().finally(() => {
     state.weekly.loading = null;
-    if (state.route.view === 'semanal') render();
+    if (feedMode === 'week') render();
   });
 }
 
@@ -407,15 +406,15 @@ async function fetchWeekly() {
   }
 }
 
-function weeklyView() {
+// key: 'all' (Para ti), a section or a subsection.
+function weeklyView(key) {
   const wk = state.weekly;
-  const { sec, sub } = state.route;
-  if (wk.error) return `<div class="empty"><p>No se ha podido cargar el archivo semanal.</p><div class="actions center-row"><button data-act="weekly-retry">Reintentar</button></div></div>`;
+  if (wk.error) return `<div class="empty"><p>No se han podido cargar las noticias de la semana.</p><div class="actions center-row"><button data-act="weekly-retry">Reintentar</button></div></div>`;
   if (!wk.index || (wk.week && !wk.weeks.has(wk.week))) {
     loadWeekly();
     return '<p class="muted center">Cargando la semana…</p>';
   }
-  if (!wk.index.weeks.length) return '<div class="empty"><p>El archivo semanal aún está vacío.</p><p class="muted">Se irá llenando con cada edición: aquí quedarán las noticias más importantes de cada semana.</p></div>';
+  if (!wk.index.weeks.length) return '<div class="empty"><p>Todavía no hay noticias de la semana.</p><p class="muted">Se irán guardando con cada edición: aquí quedarán las más importantes de cada semana.</p></div>';
 
   const weeks = wk.index.weeks; // newest first
   const i = weeks.findIndex((w) => w.id === wk.week);
@@ -426,20 +425,13 @@ function weeklyView() {
     <button data-act="week" data-week="${esc(weeks[i - 1]?.id ?? '')}"${i > 0 ? '' : ' disabled'} aria-label="Semana siguiente">›</button>
   </div>`;
 
-  const subs = sec
-    ? `<div class="sortbar" role="group" aria-label="Subsecciones">${[{ id: null, label: 'Todo' }, ...SECTION_BY_ID[sec].subs.filter((x) => sectionPref(state.profile, x.key) > -2)]
-        .map((x) => `<a class="pill" href="${href({ view: 'semanal', sec, sub: x.id })}" aria-current="${(sub ?? null) === x.id ? 'page' : 'false'}">${esc(x.label)}</a>`)
-        .join('')}</div>`
-    : '';
-
   // The objective order (peak coverage), only leaving out what the person has hidden or filtered.
   const week = wk.weeks.get(wk.week);
-  const key = sec ? (sub ? `${sec}/${sub}` : sec) : 'all';
   const stories = (week.top[key] ?? []).map((id) => week.stories[id]).filter((st) => st && scoreStory(st, state.profile));
   const list = stories.length
     ? `<ol class="list ranked">${stories.map((st) => `<li>${storyCard(st)}</li>`).join('')}</ol>`
     : '<div class="empty"><p>No hay noticias de esta sección esta semana.</p></div>';
-  return nav + subs + list;
+  return nav + list;
 }
 
 function settingsHtml() {
@@ -526,13 +518,13 @@ function render() {
   applyCorrections(state.data.stories, state.profile);
   $tabs.innerHTML = tabsHtml();
   $subtabs.innerHTML = subtabsHtml();
-  $subtabs.hidden = state.route.view !== 'section' && state.route.view !== 'semanal';
+  $subtabs.hidden = state.route.view !== 'section';
   const p = state.profile;
   const v = state.route.view;
   let html;
-  if (v === 'foryou') html = briefingHtml('portada', 'Lo importante ahora') + feedHtml(rankStories(state.data.stories, p, Date.now(), { explore: true }), 'No hay noticias que encajen con tus filtros.');
+  if (v === 'foryou' && feedMode === 'week') html = modeBar() + weeklyView('all');
+  else if (v === 'foryou') html = modeBar() + briefingHtml('portada', 'Lo importante ahora') + feedHtml(rankStories(state.data.stories, p, Date.now(), { explore: true }), 'No hay noticias que encajen con tus filtros.');
   else if (v === 'section') html = sectionView();
-  else if (v === 'semanal') html = weeklyView();
   else if (v === 'megusta') html = listHtml(listOf(p.liked), 'Aún no has marcado ninguna noticia con ❤️. Cada me gusta enseña a la web lo que te interesa.');
   else if (v === 'guardados') html = listHtml(listOf(p.saved), 'Aún no has guardado noticias.');
   else html = settingsHtml();
@@ -568,6 +560,12 @@ $main.addEventListener('click', (e) => {
       link.closest('.card')?.classList.add('read');
     }
     return;
+  }
+  const mode = e.target.closest('[data-mode]');
+  if (mode) {
+    feedMode = mode.dataset.mode;
+    state.limit = PAGE;
+    return render();
   }
   const sort = e.target.closest('[data-sort]');
   if (sort) {
@@ -734,7 +732,7 @@ function observeCards() {
   observer?.disconnect();
   timers.forEach(clearTimeout);
   timers.clear();
-  if (!['foryou', 'section'].includes(state.route.view) || !('IntersectionObserver' in window)) return;
+  if (!['foryou', 'section'].includes(state.route.view) || feedMode === 'week' || !('IntersectionObserver' in window)) return;
   observer = new IntersectionObserver(
     (entries) => {
       for (const en of entries) {
