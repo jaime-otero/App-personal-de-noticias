@@ -28,7 +28,7 @@ Navegador (web/)
 | `sources.json` | Medios y feeds, cada uno con su sección por defecto (añadir/quitar fuentes aquí) |
 | `web/lib/taxonomy.js` | Secciones, subsecciones y palabras clave para clasificar |
 | `web/lib/spoilers.js` | Detector de resultados de la NBA |
-| `scripts/ingest/weekly.js` | Archivo semanal (el modo *Semana* de cada feed): las noticias más importantes de cada semana, por sección y subsección |
+| `scripts/ingest/weekly.js` | Archivo semanal (el modo *Semana* de cada feed): las noticias más importantes de cada semana, por sección y subsección; `backfill-weekly.js` lo rellena con ediciones anteriores |
 | `scripts/ci/freshness.js` | Edad de la última edición (la usan *Actualizar noticias* y *Vigilar noticias*) |
 | `src/worker.js` | Worker: sirve la web y guarda el perfil sincronizado (KV) |
 | `scripts/ingest/` | Descarga, parseo, clasificación, agrupación y resúmenes IA (`jobs.js` decide qué noticias van a cada llamada; `embed.js`, los embeddings; `prototypes.js`, los prototipos de sección) |
@@ -124,7 +124,9 @@ Arriba de cada feed (Para ti, cada sección y cada subsección) hay un interrupt
 
 - **Importancia** = el máximo de medios que llegaron a cubrir la noticia en alguna edición (y, a igualdad, si se contó en español e inglés). No se personaliza el orden, pero sí se quitan las noticias ocultas, los medios silenciados, las palabras silenciadas y los idiomas que no lees.
 - Cada noticia cuenta en la semana en que salió su primer artículo; la semana en curso se va completando con cada edición. Se conserva su resumen IA y los spoilers de la NBA siguen tapados.
-- Se guarda en `web/data/weekly/` (un archivo por semana más `index.json`), que el workflow conserva en la caché de Actions como la edición anterior. Si esa caché se pierde (GitHub la borra tras 7 días sin usarse), el archivo empieza de nuevo desde la semana en curso.
+- **Resumen IA de la semana** arriba de Para ti, de cada sección y de la NBA (sin resultados): mientras la semana está abierta se rehace una vez al día (provisional); el martes, cuando ya no cambia, se genera el definitivo y se queda fijo. Son 9 llamadas a la IA al día, en una sola ejecución.
+- Se guarda en `web/data/weekly/` (un archivo por semana más `index.json`). Cada 30 min, en la caché de Actions, como la edición anterior; y una vez al día, en la rama **`datos`** del repo (`scripts/ci/datos.sh`), que es la copia permanente: si la caché se pierde, las semanas se recuperan de ahí. Esa rama solo tiene los JSON, sin historia común con `main`; la escribe el propio workflow (por eso tiene permiso `contents: write`; la regla de `main` sigue protegiéndola). Como el repo es público, esa rama también lo es: solo contiene titulares, enlaces y resúmenes de noticias.
+- Como cada edición solo cubre 48 h, el archivo solo conoce los días desde que existe. Para rellenar los anteriores (o si su caché se pierde), lanza a mano *Actions → Rellenar archivo semanal → Run workflow*: recupera las ediciones que cada ejecución dejó en la caché de Actions (GitHub borra las que llevan 7 días sin usarse) y las añade al archivo; la siguiente actualización lo publica. En local: `node scripts/ingest/backfill-weekly.js ruta/a/*/news.json`.
 
 ## Cómo aprende
 

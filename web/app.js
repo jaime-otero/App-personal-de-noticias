@@ -340,14 +340,30 @@ function feedHtml(ranked, emptyMsg) {
   return bar + listHtml(sortEntries(ranked, sortMode), emptyMsg);
 }
 
+// A collapsible AI summary; `id` remembers whether it was folded.
+function briefingBox(id, title, text, note) {
+  return `<details class="briefing" data-briefing="${esc(id)}"${collapsed.has(id) ? '' : ' open'}>
+    <summary><h2>${esc(title)}</h2><span class="badge">IA</span></summary>
+    <p>${esc(text)}</p>
+    <p class="muted small">${note} Puede contener errores: abre las fuentes para contrastar.</p>
+  </details>`;
+}
+
 function briefingHtml(key, title) {
   const b = state.data.briefings?.[key];
   if (!b) return '';
-  return `<details class="briefing" data-briefing="${key}"${collapsed.has(key) ? '' : ' open'}>
-    <summary><h2>${esc(title)}</h2><span class="badge">IA</span></summary>
-    <p>${esc(b.text)}</p>
-    <p class="muted small">Resumen generado con IA ${timeAgo(b.at)} a partir de los titulares de los medios. Puede contener errores: abre las fuentes para contrastar.</p>
-  </details>`;
+  return briefingBox(key, title, b.text, `Resumen generado con IA ${timeAgo(b.at)} a partir de los titulares de los medios.`);
+}
+
+// "La semana en …": Para ti, each section (not its subsections) and the NBA, as in "Ahora".
+function weeklyBriefingHtml(week, key) {
+  const b = week.briefings?.[key];
+  if (!b) return '';
+  const title = key === 'all' ? 'Lo importante de la semana' : key === 'eeuu/nba' ? 'La semana · NBA (sin resultados)' : `La semana · ${sectionLabel(key)}`;
+  const note = b.final
+    ? 'Resumen de la semana generado con IA a partir de sus noticias más importantes.'
+    : `Resumen provisional generado con IA ${timeAgo(b.at)}: se rehace cada día hasta que acaba la semana.`;
+  return briefingBox(`week:${key}`, title, b.text, note);
 }
 
 function sectionView() {
@@ -431,7 +447,7 @@ function weeklyView(key) {
   const list = stories.length
     ? `<ol class="list ranked">${stories.map((st) => `<li>${storyCard(st)}</li>`).join('')}</ol>`
     : '<div class="empty"><p>No hay noticias de esta sección esta semana.</p></div>';
-  return nav + list;
+  return nav + weeklyBriefingHtml(week, key) + list;
 }
 
 function settingsHtml() {

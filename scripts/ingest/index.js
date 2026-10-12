@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { summarize, hasAIKey } from './summarize.js';
 import { SECTIONS } from '../../web/lib/taxonomy.js';
 import { aiJobs, inSection } from './jobs.js';
 import { isSpoiler } from '../../web/lib/spoilers.js';
-import { foldStories, weeklyIndex } from './weekly.js';
+import { foldStories, readWeeks, writeWeeks, weeklyAIJobs, applyWeeklyAI } from './weekly.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const OUT = resolve(ROOT, 'web/data/news.json');
@@ -58,25 +58,29 @@ async function loadPrevious() {
 }
 
 // Weekly archive (in Actions, restored from the cache by the workflow like news.json): the
-// stories of this edition join the week they started in. Returns a line for the log.
-async function updateWeekly(stories, now) {
-  const weeks = new Map();
-  const files = await readdir(WEEKLY).catch(() => []);
-  for (const f of files.filter((f) => /^\d{4}-W\d{2}\.json$/.test(f))) {
+// stories of this edition join the week they started in, and in AI runs the weeks that are due get
+// their "La semana en …" summaries (weekly.js decides which). Returns a line for the log.
+async function updateWeekly(stories, now, { ai }) {
+  const weeks = await readWeeks(WEEKLY);
+  const changed = new Set(foldStories(weeks, stories, now));
+  const jobs = ai ? weeklyAIJobs(weeks, now) : [];
+  const results = await mapLimit(jobs, AI_CONCURRENCY, async (job) => {
     try {
-      const week = JSON.parse(await readFile(resolve(WEEKLY, f), 'utf8'));
-      weeks.set(week.id, week);
-    } catch {
-      /* a broken week file is rebuilt from this edition */
+      return await summarize(job.stories, { label: job.label, nba: job.nba, now, week: job.week });
+    } catch (err) {
+      console.warn(`⚠ Resumen IA semanal de "${job.label}" (${job.weekId}) no disponible: ${err.message.slice(0, 300)}`);
+      return null;
     }
-  }
-  const changed = foldStories(weeks, stories, now);
-  await mkdir(WEEKLY, { recursive: true });
-  for (const id of changed) await writeFile(resolve(WEEKLY, `${id}.json`), JSON.stringify(weeks.get(id)));
-  for (const f of files) if (/^\d{4}-W\d{2}\.json$/.test(f) && !weeks.has(f.slice(0, -5))) await rm(resolve(WEEKLY, f), { force: true });
-  const index = weeklyIndex(weeks, now);
-  await writeFile(resolve(WEEKLY, 'index.json'), JSON.stringify(index));
-  return `${index.weeks.length} semanas (${index.weeks.map((w) => `${w.id} ${w.stories}`).join(', ')})`;
+  });
+  let done = 0;
+  jobs.forEach((job, i) => {
+    if (applyWeeklyAI(weeks, job, results[i], now)) {
+      changed.add(job.weekId);
+      done++;
+    }
+  });
+  const log = await writeWeeks(WEEKLY, weeks, changed, now);
+  return jobs.length ? `${log}; resúmenes IA semanales: ${done}/${jobs.length} (${[...new Set(jobs.map((j) => `${j.weekId}${j.final ? ' final' : ''}`))].join(', ')})` : log;
 }
 
 async function main() {
@@ -180,7 +184,7 @@ async function main() {
   else await rm(VECTORS, { force: true });
   let weeklyLog;
   try {
-    weeklyLog = await updateWeekly(stories, now);
+    weeklyLog = await updateWeekly(stories, now, { ai: !skipAI && hasAIKey() });
   } catch (err) {
     weeklyLog = `no actualizado: ${err.message}`;
   }

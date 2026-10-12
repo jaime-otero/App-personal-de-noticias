@@ -1,0 +1,106 @@
+name: Rellenar archivo semanal
+
+# A mano (Actions → Rellenar archivo semanal → Run workflow). Rellena la vista Semana con las
+# ediciones anteriores que cada ejecución de "Actualizar noticias" dejó en la caché de Actions
+# (news-<run_id>): sirve para los días previos a que existiera el archivo semanal o si su caché se
+# pierde. Guarda el resultado en la caché y en la rama datos; la siguiente ejecución de
+# "Actualizar noticias" lo recoge y lo publica.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dias:
+        description: 'Días hacia atrás (GitHub borra las cachés que llevan 7 días sin usarse)'
+        default: '8'
+      cada_horas:
+        description: 'Una edición cada N horas (cada edición cubre 48 h)'
+        default: '6'
+
+permissions:
+  contents: write # guardar el resultado en la rama datos
+  actions: read # listar las cachés
+
+# La misma cola que "Actualizar noticias": así no guardan el archivo semanal a la vez.
+concurrency:
+  group: update-news
+  cancel-in-progress: false
+
+jobs:
+  listar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      keys: ${{ steps.keys.outputs.keys }}
+    steps:
+      - id: keys
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIAS: ${{ inputs.dias }}
+          CADA: ${{ inputs.cada_horas }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/actions/caches?key=news-&ref=refs/heads/main&per_page=100" \
+            --jq '.actions_caches[] | [.key, .created_at] | @tsv' > caches.tsv
+          echo "$(wc -l < caches.tsv) cachés news-*"
+          # La más reciente de cada tramo de CADA horas dentro de los últimos DIAS días.
+          KEYS=$(node -e '
+            const rows = require("fs").readFileSync("caches.tsv", "utf8").trim().split("\n").filter(Boolean).map((l) => l.split("\t"));
+            const since = Date.now() - Number(process.env.DIAS) * 864e5, step = Number(process.env.CADA) * 3.6e6;
+            const pick = new Map();
+            for (const [key, at] of rows) {
+              const t = Date.parse(at);
+              if (t < since) continue;
+              const slot = Math.floor(t / step);
+              if (!pick.has(slot) || t > pick.get(slot)[1]) pick.set(slot, [key, t]);
+            }
+            console.log(JSON.stringify([...pick.values()].map(([k]) => k).slice(-200)));
+          ')
+          echo "Se recuperan: $KEYS"
+          echo "keys=$KEYS" >> "$GITHUB_OUTPUT"
+
+  recuperar:
+    needs: listar
+    if: needs.listar.outputs.keys != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        key: ${{ fromJSON(needs.listar.outputs.keys) }}
+    steps:
+      - uses: actions/cache/restore@v6
+        with:
+          path: web/data/news.json
+          key: ${{ matrix.key }}
+          fail-on-cache-miss: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.key }}
+          path: web/data/news.json
+          retention-days: 1
+
+  rellenar:
+    needs: [listar, recuperar]
+    # Aunque alguna caché haya desaparecido entre medias: se usan las que se pudieron recuperar.
+    if: always() && needs.listar.outputs.keys != '[]' && needs.listar.outputs.keys != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      # El archivo actual: se completa, no se sustituye. Se guarda con una clave nueva, que es la que
+      # restaura la siguiente ejecución de "Actualizar noticias" (la más reciente de weekly-*).
+      - uses: actions/cache@v6
+        with:
+          path: web/data/weekly
+          key: weekly-${{ github.run_id }}
+          restore-keys: weekly-
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: news-*
+          path: ediciones
+      - run: bash scripts/ci/datos.sh pull
+      - run: node scripts/ingest/backfill-weekly.js ediciones/*/news.json
+      - run: bash scripts/ci/datos.sh push 0
