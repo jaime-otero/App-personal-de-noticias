@@ -27,6 +27,12 @@ for (const file of process.argv.slice(2)) {
 const weeks = await readWeeks(WEEKLY);
 const changed = new Set();
 const sorted = [...editions.values()].sort((a, b) => a.generatedAt.localeCompare(b.generatedAt));
-for (const ed of sorted) for (const id of foldStories(weeks, ed.stories, Date.parse(ed.generatedAt))) changed.add(id);
+for (const ed of sorted) {
+  try {
+    for (const id of foldStories(weeks, ed.stories, Date.parse(ed.generatedAt))) changed.add(id);
+  } catch (err) {
+    console.warn(`⚠ Edición ${ed.generatedAt} saltada: ${err.message}`);
+  }
+}
 console.log(`✓ ${sorted.length} ediciones (${sorted[0]?.generatedAt ?? '—'} → ${sorted.at(-1)?.generatedAt ?? '—'})`);
 console.log(`  semanal: ${await writeWeeks(WEEKLY, weeks, changed)}`);

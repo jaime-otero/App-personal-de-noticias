@@ -52,8 +52,9 @@ function compact(story, now) {
     title: story.title,
     image: story.image,
     lang: story.lang,
-    langs: story.langs,
-    sections: story.sections,
+    // Editions from before langs existed (the backfill reads old ones) only have lang.
+    langs: story.langs ?? [story.lang].filter(Boolean),
+    sections: story.sections ?? [],
     publishedAt: firstSeen(story) ?? new Date(now).toISOString(),
     n: story.sources.length,
     sources: story.sources.slice(0, MAX_SOURCES).map(({ title, url, source, sourceId }) => ({ title, url, source, sourceId })),
@@ -64,7 +65,7 @@ function compact(story, now) {
   return out;
 }
 
-const rank = (a, b) => b.n - a.n || b.langs.length - a.langs.length || a.publishedAt.localeCompare(b.publishedAt);
+const rank = (a, b) => b.n - a.n || (b.langs?.length ?? 0) - (a.langs?.length ?? 0) || a.publishedAt.localeCompare(b.publishedAt);
 
 // The same story under another id (an older article joined it): any shared link.
 function findSame(week, story) {
