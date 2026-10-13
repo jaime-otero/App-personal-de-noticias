@@ -73,7 +73,7 @@ jobs:
           path: web/data/news.json
           key: ${{ matrix.key }}
           fail-on-cache-miss: true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.key }}
           path: web/data/news.json
@@ -97,7 +97,7 @@ jobs:
           path: web/data/weekly
           key: weekly-${{ github.run_id }}
           restore-keys: weekly-
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: news-*
           path: ediciones
