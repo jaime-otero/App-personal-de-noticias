@@ -14,7 +14,7 @@
   "triggers": { "crons": ["17,47 * * * *"] },
   // Keep the Worker's logs (dispatch ok / errors) in the dashboard: Workers & Pages → mi-diario → Logs.
   "observability": { "enabled": true },
-  "vars": { "GITHUB_REPO": "jaime-otero/Webapp_Personal" },
+  "vars": { "GITHUB_REPO": "jaime-otero/App-personal-de-noticias" },
   // Keep the variables added in the dashboard (e.g. INVITES as plain text, so the codes can be
   // read there); without this every deploy would delete them. The repo is public: never put
   // INVITES here.

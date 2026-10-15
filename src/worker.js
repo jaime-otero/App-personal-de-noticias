@@ -217,7 +217,7 @@ export async function dispatchUpdate(env, scheduledTime, { retryDelayMs = 1000 }
     console.error('dispatch skipped: GITHUB_DISPATCH_TOKEN is not set');
     return;
   }
-  const repo = env.GITHUB_REPO || 'jaime-otero/Webapp_Personal';
+  const repo = env.GITHUB_REPO || 'jaime-otero/App-personal-de-noticias';
   const request = {
     method: 'POST',
     headers: {
