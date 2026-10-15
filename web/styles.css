@@ -116,6 +116,10 @@ dialog::backdrop { background: rgb(0 0 0 / 0.45); }
   .thumb { width: 84px; height: 84px; }
   .card { padding: 12px; gap: 10px; }
   .card h2 { font-size: 1.05rem; }
+  /* Icons only, so the five card buttons fit on one row (each keeps its aria-label). */
+  .card-actions { flex-wrap: nowrap; }
+  .card-actions .label { display: none; }
+  .card-actions button { flex: 1; max-width: 56px; padding: 5px 0; font-size: 0.95rem; }
 }
 @media (max-width: 380px) {
   .thumb { display: none; }
