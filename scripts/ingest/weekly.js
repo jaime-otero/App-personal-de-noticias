@@ -9,6 +9,8 @@
 //    reactions, the first violations) join through their vectors and shared names, with average
 //    linkage as in cluster.js but a whole week apart. A topic shows its most covered story, with
 //    the others as its timeline.
+//  - Continuity: a topic that goes on from the week before links to it (`prev`), matched the same
+//    way as stories join a topic.
 //  - Importance: distinct outlets over the whole week, plus a quarter of every further day an
 //    outlet came back to it (a story that stays on the front pages for days beats a one-day one
 //    with as many outlets), then the languages it was told in. Specialised outlets (sport, science,
@@ -26,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { SECTIONS, compileKeywords } from '../../web/lib/taxonomy.js';
 import { isNbaStory } from '../../web/lib/spoilers.js';
 import { averageLinkage, features, pairScore } from './cluster.js';
-import { fromInt8B64, normalizeVec, toInt8B64 } from './embed.js';
+import { dot, fromInt8B64, normalizeVec, toInt8B64 } from './embed.js';
 import { hash, normalize } from './text.js';
 
 export const TOP_N = 10;
@@ -37,6 +39,7 @@ export const KEEP_WEEKS = 12;
 const POOL_N = 30;
 const MAX_SOURCES = 6;
 const MAX_RELATED = 8;
+const MAX_IDS = 40;
 const MAX_URLS = 60;
 const MAX_ENTS = 40;
 const MAX_EXTRACT = 280;
@@ -206,7 +209,7 @@ function mergeEntries(old, cur) {
 function legacyPool(week) {
   const pool = {};
   for (const s of Object.values(week.stories ?? {})) {
-    const { n, days, score, soft, related, ...rest } = s;
+    const { n, days, score, soft, related, ids, prev, ...rest } = s;
     pool[s.id] = {
       ...rest,
       best: n ?? s.sources.length,
@@ -284,6 +287,8 @@ function topicStory(members) {
   };
   if (lead.aiSummary) out.aiSummary = lead.aiSummary;
   else if (lead.summary) out.summary = lead.summary;
+  // Every story id of the topic: the app knows a topic was read if any of them was.
+  out.ids = members.map((m) => m.id).slice(0, MAX_IDS);
   if (soft) out.soft = true;
   if (members.some((m) => m.spoiler)) out.spoiler = true;
   // Twice the same headline (two copies the daily grouping kept apart) says nothing new.
@@ -297,11 +302,45 @@ function topicStory(members) {
   return out;
 }
 
+// The stories of a topic as items for the pair scores (the ones with a vector).
+const itemsOf = (members) =>
+  members.filter((m) => m.vec).map((m) => ({ v: fromInt8B64(m.vec), ents: new Set(m.ents), score: features(m).score }));
+
+// Whether two topics of consecutive weeks are one: the same average linkage that joins stories into
+// a topic, over every pair of their stories.
+function sameTopic(a, b) {
+  if (!a.length || !b.length) return 0;
+  let sum = 0;
+  for (const x of a) for (const y of b) sum += topicPair(dot(x.v, y.v), x, y);
+  return sum / (a.length * b.length);
+}
+
+// The topic of the week before that this one goes on from, among the ones it showed.
+function continuations(topics, prev) {
+  if (!prev?.pool) return;
+  const before = topicsOf(Object.values(prev.pool))
+    .map((members) => ({ items: itemsOf(members), story: prev.stories?.[topicStory(members).id] }))
+    .filter((t) => t.items.length && t.story);
+  for (const t of topics) {
+    const items = itemsOf(t.members);
+    let best = null;
+    let bestScore = TOPIC_LINK;
+    for (const b of before) {
+      const s = sameTopic(items, b.items);
+      if (s >= bestScore) [best, bestScore] = [b.story, s];
+    }
+    if (best) t.story.prev = { week: prev.id, id: best.id, title: best.title, n: best.n };
+  }
+}
+
+// The week before `week` in `weeks`, if it is kept.
+export const prevOf = (weeks, week) => weeks.get(weekOf(Date.parse(week.start) - 3 * 864e5).id);
+
 const rank = (a, b) => b.score - a.score || b.langs.length - a.langs.length || a.publishedAt.localeCompare(b.publishedAt);
 
 // Rebuilds the published week from its pool, and drops from the pool the stories of topics no
-// list could still reach.
-export function rebuild(week) {
+// list could still reach. `prev`: the week before, for the topics that go on from it.
+export function rebuild(week, prev = null) {
   const pool = Object.values(week.pool);
   const topics = topicsOf(pool)
     .map((members) => ({ members, story: topicStory(members) }))
@@ -315,7 +354,9 @@ export function rebuild(week) {
     inList.slice(0, POOL_N).forEach((t, i) => (i < ids.length || t.story.n > 1) && keep.add(t));
   }
   const shown = new Set(Object.values(week.top).flat());
-  week.stories = Object.fromEntries(topics.filter((t) => shown.has(t.story.id)).map((t) => [t.story.id, t.story]));
+  const published = topics.filter((t) => shown.has(t.story.id));
+  continuations(published, prev);
+  week.stories = Object.fromEntries(published.map((t) => [t.story.id, t.story]));
   week.pool = Object.fromEntries([...keep].flatMap((t) => t.members).map((e) => [e.id, e]));
 }
 
@@ -346,9 +387,10 @@ export function foldStories(weeks, stories, now = Date.now()) {
     week.pool[e.id] = e;
     changed.add(w.id);
   }
-  for (const id of changed) {
+  // Oldest first: a week links to the topics of the one before as just rebuilt.
+  for (const id of [...changed].sort()) {
     const week = weeks.get(id);
-    rebuild(week);
+    rebuild(week, prevOf(weeks, week));
     week.updatedAt = new Date(now).toISOString();
   }
   for (const id of weeks.keys()) if (weeks.get(id).start < oldest) weeks.delete(id);
@@ -362,13 +404,21 @@ export function foldStories(weeks, stories, now = Date.now()) {
 export async function embedMissing(weeks, embedder) {
   if (!embedder) return [];
   const changed = [];
-  for (const week of weeks.values()) {
+  // Oldest first; a week is rebuilt too when the one before changed (its links to it may change).
+  for (const week of [...weeks.values()].sort((a, b) => a.start.localeCompare(b.start))) {
     week.pool ??= legacyPool(week);
     // Vectors of another model cannot be compared with this one's.
     if (week.model && week.model !== embedder.id) for (const e of Object.values(week.pool)) delete e.vec;
     week.model = embedder.id;
     const todo = Object.values(week.pool).filter((e) => !e.vec);
-    if (!todo.length) continue;
+    if (!todo.length) {
+      const prev = prevOf(weeks, week);
+      if (prev && changed.includes(prev.id)) {
+        rebuild(week, prev);
+        changed.push(week.id);
+      }
+      continue;
+    }
     const titles = todo.map((e) => e.sources.map((s) => s.title).filter(Boolean));
     const vecs = await embedder.embed(titles.flat());
     let k = 0;
@@ -379,7 +429,7 @@ export async function embedMissing(weeks, embedder) {
       for (const v of own) for (let d = 0; d < v.length; d++) mean[d] += v[d];
       e.vec = toInt8B64(normalizeVec(mean));
     });
-    rebuild(week);
+    rebuild(week, prevOf(weeks, week));
     changed.push(week.id);
   }
   return changed;

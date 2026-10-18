@@ -282,6 +282,10 @@ function storyCard(entry) {
         .map((s) => `<li><a href="${esc(safeUrl(s.url))}" target="_blank" rel="noopener" data-open="${esc(story.id)}"><strong>${esc(s.source)}</strong> · ${esc(s.title)}</a></li>`)
         .join('')}</ul></details>`
     : '';
+  // Weekly topics that go on from the week before link to it.
+  const prev = story.prev
+    ? `<p class="prevweek"><button data-act="week" data-week="${esc(story.prev.week)}" title="${esc(story.prev.title)}">↩ Viene de la semana pasada</button> <span class="muted">${story.prev.n} ${story.prev.n === 1 ? 'medio' : 'medios'} entonces</span></p>`
+    : '';
   // Weekly topics: the other stories of the topic, in the order they came out.
   const related = story.related?.length
     ? `<details class="others"><summary>Cómo ha evolucionado (${story.related.length})</summary><ul>${story.related
@@ -295,6 +299,7 @@ function storyCard(entry) {
       <h2><a href="${esc(safeUrl(first.url))}" target="_blank" rel="noopener" data-open="${esc(story.id)}">${esc(story.title)}</a></h2>
       ${text}
       ${why}
+      ${prev}
       ${related}
       ${others}
       <div class="actions">
@@ -335,6 +340,8 @@ let sortMode = (() => {
 // Every feed (Para ti, sections, subsections) shows either the latest stories or the most important
 // ones of a week. Per visit: the app always opens on "Ahora".
 let feedMode = 'now';
+// In "Semana": every topic, or only the ones the person has not opened. Per visit too.
+let weekFilter = 'all';
 
 const modeBar = () =>
   `<div class="modebar" role="group" aria-label="Qué noticias ver">${[['now', 'Ahora'], ['week', 'Semana']]
@@ -430,6 +437,16 @@ async function fetchWeekly() {
   }
 }
 
+// "8 temas nuevos · 4 siguen de la semana pasada": what changed from the week before, when the week
+// knows (weeks saved before topics did not link to the one before).
+function weekSummary(week, stories) {
+  if (!stories.some((st) => st.ids)) return '';
+  const going = stories.filter((st) => st.prev).length;
+  const fresh = stories.length - going;
+  const parts = [fresh && `${fresh} ${fresh === 1 ? 'tema nuevo' : 'temas nuevos'}`, going && `${going} ${going === 1 ? 'sigue' : 'siguen'} de la semana pasada`].filter(Boolean);
+  return parts.length ? `<p class="weeksum muted small">${parts.join(' · ')}</p>` : '';
+}
+
 // key: 'all' (Para ti), a section or a subsection.
 function weeklyView(key) {
   const wk = state.weekly;
@@ -451,11 +468,28 @@ function weeklyView(key) {
 
   // The objective order (coverage over the week), only leaving out what the person has hidden or filtered.
   const week = wk.weeks.get(wk.week);
-  const stories = (week.top[key] ?? []).map((id) => week.stories[id]).filter((st) => st && scoreStory(st, state.profile));
-  const list = stories.length
-    ? `<ol class="list ranked">${stories.map((st) => `<li>${storyCard(st)}</li>`).join('')}</ol>`
-    : '<div class="empty"><p>No hay noticias de esta sección esta semana.</p></div>';
-  return nav + weeklyBriefingHtml(week, key) + list;
+  const ranked = (week.top[key] ?? [])
+    .map((id) => week.stories[id])
+    .filter((st) => st && scoreStory(st, state.profile))
+    .map((st, n) => ({ st, rank: n + 1 }));
+  // What the person missed: topics none of whose stories they opened, liked or saved. Opened
+  // stories are remembered for two weeks, so only this week and the one before can tell.
+  const p = state.profile;
+  const engaged = (st) => (st.ids ?? [st.id]).some((id) => p.read[id] || isOn(p.liked, id) || isOn(p.saved, id));
+  const recent = Date.parse(`${w.end}T23:59:59Z`) > Date.now() - 14 * 864e5;
+  const missed = recent ? ranked.filter(({ st }) => !engaged(st)) : [];
+  const filter = recent && weekFilter === 'missed' ? 'missed' : 'all';
+  const filterBar =
+    recent && ranked.length
+      ? `<div class="sortbar" role="group" aria-label="Qué temas ver"><button data-wfilter="all" aria-pressed="${filter === 'all'}">Todos</button><button data-wfilter="missed" aria-pressed="${filter === 'missed'}">No abiertos (${missed.length})</button></div>`
+      : '';
+  const shown = filter === 'missed' ? missed : ranked;
+  const list = shown.length
+    ? `<ol class="list ranked">${shown.map(({ st, rank }) => `<li data-rank="${rank}">${storyCard(st)}</li>`).join('')}</ol>`
+    : filter === 'missed'
+      ? '<div class="empty"><p>Has abierto todos los temas importantes de esta semana.</p></div>'
+      : '<div class="empty"><p>No hay noticias de esta sección esta semana.</p></div>';
+  return nav + weekSummary(week, ranked.map(({ st }) => st)) + weeklyBriefingHtml(week, key) + filterBar + list;
 }
 
 function settingsHtml() {
@@ -589,6 +623,11 @@ $main.addEventListener('click', (e) => {
   if (mode) {
     feedMode = mode.dataset.mode;
     state.limit = PAGE;
+    return render();
+  }
+  const wfilter = e.target.closest('[data-wfilter]');
+  if (wfilter) {
+    weekFilter = wfilter.dataset.wfilter;
     return render();
   }
   const sort = e.target.closest('[data-sort]');
