@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultProfile } from '../web/lib/profile.js';
-import { rankStories, scoreStory, train, featuresOf, entities, topFeatures, sortEntries } from '../web/lib/rank.js';
+import { rankStories, rankWeek, scoreStory, train, featuresOf, entities, topFeatures, sortEntries } from '../web/lib/rank.js';
 
 const NOW = Date.parse('2026-10-04T12:00:00Z');
 let n = 0;
@@ -108,4 +108,30 @@ test('sortEntries orders by recency or by coverage and drops exploration marks',
   assert.deepEqual(ids(sortEntries(entries, 'coverage')), ['c', 'a', 'b']);
   assert.ok(sortEntries(entries, 'recent').every((e) => !e.explore));
   assert.deepEqual(ids(entries), ['a', 'b', 'c']);
+});
+
+// Weekly topics: an importance score (weekly.js) and no freshness that matters.
+const topic = (title, sections, score) => story(title, sections, { score, n: Math.round(score), publishedAt: '2026-09-29T10:00:00Z' });
+
+test('rankWeek: the person\'s sections reorder the week, but a much bigger topic stays above', () => {
+  const p = defaultProfile(NOW);
+  const politics = topic('El Gobierno convoca elecciones', ['espana/politica'], 16);
+  const nba = topic('Doncic firma con los Lakers', ['eeuu/nba'], 8);
+  assert.deepEqual(ids(rankWeek([nba, politics], p)), [politics.id, nba.id]); // without preferences: importance
+  p.sections['eeuu/nba'] = 3; // Me encanta
+  p.sections['espana'] = 0; // Poco
+  assert.deepEqual(ids(rankWeek([politics, nba], p)), [nba.id, politics.id]); // 4.5 of interest beat 2 of importance
+  const war = topic('Rusia y Ucrania firman una tregua', ['espana/politica'], 64);
+  assert.equal(ids(rankWeek([nba, war], p))[0], war.id); // 8 times the coverage: 6 points of importance
+});
+
+test('rankWeek leaves out what the person filtered and says why a topic is there', () => {
+  const p = defaultProfile(NOW);
+  const a = topic('Wembanyama lidera a los Spurs', ['eeuu/nba'], 4);
+  const b = topic('Nuevo récord cuántico', ['ciencia/fisica'], 4);
+  for (let i = 0; i < 5; i++) train(p.model, topic('Wembanyama vuelve a brillar', ['eeuu/nba'], 4), 'like', NOW);
+  p.hidden[b.id] = NOW;
+  const ranked = rankWeek([a, b], p);
+  assert.deepEqual(ids(ranked), [a.id]);
+  assert.ok(ranked[0].reasons.length);
 });

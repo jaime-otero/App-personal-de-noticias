@@ -1,5 +1,5 @@
 import { loadProfile, saveProfile, pruneProfile, defaultProfile, migrate, isOn, listOf, setFlag, toRemote, mergeProfiles, orderedSections, moveSection } from './lib/profile.js';
-import { rankStories, sortEntries, SORTS, train, topFeatures, featureLabel, sectionPref, scoreStory, emptyModel } from './lib/rank.js';
+import { rankStories, rankWeek, sortEntries, SORTS, train, topFeatures, featureLabel, sectionPref, scoreStory, emptyModel } from './lib/rank.js';
 import { SECTIONS, SECTION_BY_ID, sectionLabel } from './lib/taxonomy.js';
 import { isSpoiler } from './lib/spoilers.js';
 import { applyCorrections, setCorrection, clearCorrection, listCorrections } from './lib/corrections.js';
@@ -342,6 +342,14 @@ let sortMode = (() => {
 let feedMode = 'now';
 // In "Semana": every topic, or only the ones the person has not opened. Per visit too.
 let weekFilter = 'all';
+// In "Semana": the most important topics, or the person's order ("Para mí"); a per-device choice.
+let weekOrder = (() => {
+  try {
+    return localStorage.getItem('midiario.weekorder') === 'me' ? 'me' : 'top';
+  } catch {
+    return 'top';
+  }
+})();
 
 const modeBar = () =>
   `<div class="modebar" role="group" aria-label="Qué noticias ver">${[['now', 'Ahora'], ['week', 'Semana']]
@@ -466,12 +474,16 @@ function weeklyView(key) {
     <button data-act="week" data-week="${esc(weeks[i - 1]?.id ?? '')}"${i > 0 ? '' : ' disabled'} aria-label="Semana siguiente">›</button>
   </div>`;
 
-  // The objective order (coverage over the week), only leaving out what the person has hidden or filtered.
+  // The objective order (coverage over the week), only leaving out what the person has hidden or
+  // filtered; or "Para mí": every topic the week published in this feed (not only its top list),
+  // in the person's order, as many as the top list shows.
   const week = wk.weeks.get(wk.week);
-  const ranked = (week.top[key] ?? [])
-    .map((id) => week.stories[id])
-    .filter((st) => st && scoreStory(st, state.profile))
-    .map((st, n) => ({ st, rank: n + 1 }));
+  const size = key === 'all' ? 20 : 10;
+  const entries =
+    weekOrder === 'me'
+      ? rankWeek(Object.values(week.stories).filter((st) => key === 'all' || inSection(st, key)), state.profile).slice(0, size)
+      : (week.top[key] ?? []).map((id) => week.stories[id]).filter((st) => st && scoreStory(st, state.profile)).map((story) => ({ story }));
+  const ranked = entries.map((entry, n) => ({ st: entry.story, entry, rank: n + 1 }));
   // What the person missed: topics none of whose stories they opened, liked or saved. Opened
   // stories are remembered for two weeks, so only this week and the one before can tell.
   const p = state.profile;
@@ -479,13 +491,17 @@ function weeklyView(key) {
   const recent = Date.parse(`${w.end}T23:59:59Z`) > Date.now() - 14 * 864e5;
   const missed = recent ? ranked.filter(({ st }) => !engaged(st)) : [];
   const filter = recent && weekFilter === 'missed' ? 'missed' : 'all';
+  const orders = [['top', 'Lo más importante'], ['me', 'Para mí']]
+    .map(([id, label]) => `<button data-worder="${id}" aria-pressed="${weekOrder === id}">${label}</button>`)
+    .join('');
   const filterBar =
-    recent && ranked.length
-      ? `<div class="sortbar" role="group" aria-label="Qué temas ver"><button data-wfilter="all" aria-pressed="${filter === 'all'}">Todos</button><button data-wfilter="missed" aria-pressed="${filter === 'missed'}">No abiertos (${missed.length})</button></div>`
-      : '';
+    `<div class="sortbar" role="group" aria-label="Orden de los temas"><span class="muted small">Orden:</span>${orders}</div>` +
+    (recent
+      ? `<div class="sortbar" role="group" aria-label="Qué temas ver"><span class="muted small">Ver:</span><button data-wfilter="all" aria-pressed="${filter === 'all'}">Todos</button><button data-wfilter="missed" aria-pressed="${filter === 'missed'}">No abiertos (${missed.length})</button></div>`
+      : '');
   const shown = filter === 'missed' ? missed : ranked;
   const list = shown.length
-    ? `<ol class="list ranked">${shown.map(({ st, rank }) => `<li data-rank="${rank}">${storyCard(st)}</li>`).join('')}</ol>`
+    ? `<ol class="list ranked">${shown.map(({ entry, rank }) => `<li data-rank="${rank}">${storyCard(entry)}</li>`).join('')}</ol>`
     : filter === 'missed'
       ? '<div class="empty"><p>Has abierto todos los temas importantes de esta semana.</p></div>'
       : '<div class="empty"><p>No hay noticias de esta sección esta semana.</p></div>';
@@ -623,6 +639,14 @@ $main.addEventListener('click', (e) => {
   if (mode) {
     feedMode = mode.dataset.mode;
     state.limit = PAGE;
+    return render();
+  }
+  const worder = e.target.closest('[data-worder]');
+  if (worder) {
+    weekOrder = worder.dataset.worder;
+    try {
+      localStorage.setItem('midiario.weekorder', weekOrder);
+    } catch {}
     return render();
   }
   const wfilter = e.target.closest('[data-wfilter]');

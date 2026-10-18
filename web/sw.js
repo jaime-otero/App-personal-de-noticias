@@ -1,7 +1,7 @@
 // App shell: stale-while-revalidate (instant load, updates picked up on the next visit). News data and the
 // weekly archive: network-first with the cached copy as offline fallback.
 // Pages: network-first, so a logged-out visit reaches the login redirect instead of a cached shell.
-const VERSION = 'v12';
+const VERSION = 'v13';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'lib/profile.js', 'lib/rank.js', 'lib/tokens.js', 'lib/taxonomy.js', 'lib/spoilers.js', 'lib/corrections.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
