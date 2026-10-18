@@ -294,3 +294,93 @@ test('weeks saved before pools become pools, get vectors and group into topics',
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// A story told by these outlets (by name), on one day.
+function toldBy(id, outlets, extra = {}) {
+  const s = story(id, outlets.length, ['espana'], undefined, extra);
+  s.sources.forEach((x, i) => Object.assign(x, { source: outlets[i], sourceId: outlets[i].toLowerCase() }));
+  return s;
+}
+
+test('outletWeights: specialised outlets weigh half, sources.json can override it', async () => {
+  const { outletWeights } = await import('../scripts/ingest/weekly.js');
+  const w = outletWeights([
+    { name: 'Diario', sections: ['espana'] },
+    { name: 'Diario', sections: ['espana/deportes'] }, // a sports feed of a general paper
+    { name: 'Deportivo', sections: ['espana/deportes'] },
+    { name: 'Deportivo', sections: ['eeuu/nba', 'deportes/tenis'] }, // NBA is sport too
+    { name: 'Revista', sections: ['ciencia/espacio'] },
+    { name: 'Divulga', sections: [], weight: 0.5 },
+    { name: 'Agencia', sections: ['ciencia'], weight: 1 },
+  ]);
+  assert.deepEqual(Object.fromEntries(w), { Diario: 1, Deportivo: 0.5, Revista: 0.5, Divulga: 0.5, Agencia: 1 });
+});
+
+test('specialised outlets count half: a story that reaches the general papers ranks higher', () => {
+  const weeks = new Map();
+  foldStories(weeks, [
+    toldBy('sport', ['Marca', 'AS', 'Mundo Deportivo', 'ESPN', 'BBC Sport', 'CBS Sports']),
+    toldBy('news', ['El País', 'El Mundo', 'ABC', 'RTVE']),
+  ], NOW);
+  const w = weeks.get('2026-W41');
+  assert.deepEqual(w.top.all, ['news', 'sport']);
+  assert.equal(w.stories.sport.n, 6); // the count shown is still every outlet
+  assert.equal(w.stories.sport.score, 3);
+  assert.equal(w.stories.news.score, 4);
+});
+
+test('soft topics weigh less', () => {
+  const weeks = new Map();
+  foldStories(weeks, [
+    toldBy('memes', ['El País', 'El Mundo', 'ABC', 'RTVE', '20minutos'], { title: 'Musk presenta su coche volador y las redes se llenan de memes' }),
+    toldBy('law', ['El País', 'El Mundo', 'ABC', 'RTVE'], { title: 'El Congreso aprueba la ley de vivienda' }),
+  ], NOW);
+  const w = weeks.get('2026-W41');
+  assert.deepEqual(w.top.all, ['law', 'memes']);
+  assert.equal(w.stories.memes.soft, true);
+  assert.equal(w.stories.memes.score, 3);
+  assert.equal(w.stories.law.soft, undefined);
+});
+
+test('a service headline gives way to another outlet\'s', () => {
+  const weeks = new Map();
+  const s = toldBy('match', ['Marca', 'El País'], { title: 'A qué hora es el Alcaraz - Sinner: horario y dónde ver la final', summary: 'Horario y canal' });
+  s.sources[0].title = s.title;
+  s.sources[1].title = 'Alcaraz gana a Sinner y se lleva Shanghái';
+  foldStories(weeks, [s], NOW);
+  const shown = weeks.get('2026-W41').stories.match;
+  assert.equal(shown.title, 'Alcaraz gana a Sinner y se lleva Shanghái');
+  assert.equal(shown.sources[0].source, 'El País'); // the headline links to its own article
+  assert.equal(shown.summary, undefined); // the extract was the service piece's
+});
+
+test('a topic that goes on from the week before links to it', () => {
+  const weeks = new Map();
+  const truce = (id, n, at, title) => withVec(story(id, n, ['internacional/europa'], at, { title }), v(1, 0.05, 0));
+  foldStories(weeks, [
+    truce('w40', 7, '2026-10-02T10:00:00Z', 'Rusia y Ucrania negocian una tregua con Trump'),
+    withVec(story('quake', 5, ['internacional/latam'], '2026-10-02T11:00:00Z', { title: 'Terremoto en Panamá' }), v(0, 1, 0)),
+  ], NOW);
+  foldStories(weeks, [
+    truce('w41a', 4, '2026-10-07T10:00:00Z', 'Trump anuncia la tregua entre Rusia y Ucrania'),
+    truce('w41b', 3, '2026-10-08T10:00:00Z', 'Rusia rompe la tregua en Ucrania, dice Trump'),
+    withVec(story('nobel', 6, ['ciencia'], '2026-10-07T12:00:00Z', { title: 'Nobel de Física para el IceCube' }), v(0, 0, 1)),
+  ], NOW);
+  const w41 = weeks.get('2026-W41');
+  assert.deepEqual(w41.stories.w41a.prev, { week: '2026-W40', id: 'w40', title: 'Rusia y Ucrania negocian una tregua con Trump', n: 7 });
+  assert.equal(w41.stories.nobel.prev, undefined);
+  assert.deepEqual(w41.stories.w41a.ids.sort(), ['w41a', 'w41b']);
+  // The week before does not link forward.
+  assert.equal(weeks.get('2026-W40').stories.w40.prev, undefined);
+});
+
+test('embedMissing rebuilds a week when the one before gets its vectors', async () => {
+  const weeks = new Map();
+  // Stories without vectors (an old edition): no topics, no links yet.
+  foldStories(weeks, [story('w40', 7, ['internacional'], '2026-10-02T10:00:00Z', { title: 'Rusia y Ucrania negocian una tregua con Trump' })], NOW);
+  foldStories(weeks, [story('w41', 4, ['internacional'], '2026-10-07T10:00:00Z', { title: 'Trump anuncia la tregua entre Rusia y Ucrania' })], NOW);
+  assert.equal(weeks.get('2026-W41').stories.w41.prev, undefined);
+  const embedder = { id: 'fake', embed: async (texts) => texts.map(() => v(1, 0)) };
+  assert.deepEqual(await embedMissing(weeks, embedder), ['2026-W40', '2026-W41']);
+  assert.equal(weeks.get('2026-W41').stories.w41.prev.id, 'w40');
+});

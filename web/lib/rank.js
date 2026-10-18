@@ -126,7 +126,9 @@ const containsKeyword = (text, kw) => kw && normalize(text).includes(normalize(k
 
 // ---------- scoring ----------
 
-// Returns { score, learned, reasons } or null when the story must not be shown.
+// Returns { score, interest, learned, reasons } or null when the story must not be shown.
+// `interest`: the part of the score that is about the person (sections, what was learned, keywords,
+// outlets), without the editorial signals (coverage, freshness).
 export function scoreStory(story, profile, now = Date.now()) {
   if (profile.hidden[story.id] || profile.disliked[story.id]) return null;
   // A story told in both languages shows if any of its outlets writes in one the person reads.
@@ -149,8 +151,9 @@ export function scoreStory(story, profile, now = Date.now()) {
   const recency = -ageH / 8;
   const readPenalty = profile.read[story.id] ? -4 : 0;
 
-  const score = pref * 1.5 + learned + boost + sourceScore + coverage + recency + readPenalty + (story.aiSummary ? 0.3 : 0);
-  return { score, learned, reasons: reasons(profile, feats) };
+  const interest = pref * 1.5 + learned + boost + sourceScore;
+  const score = interest + coverage + recency + readPenalty + (story.aiSummary ? 0.3 : 0);
+  return { score, interest, learned, reasons: reasons(profile, feats) };
 }
 
 // The two learned features that pull this story up the most, in words.
@@ -204,22 +207,58 @@ export function rankStories(stories, profile, now = Date.now(), { explore = fals
         continue;
       }
     }
-    let bestI = 0;
-    let bestVal = -Infinity;
-    for (let i = 0; i < Math.min(pool.length, 15); i++) {
-      const main = pool[i].story.sections[0];
-      const val = pool[i].score - 0.9 * (seenSections[main] ?? 0);
-      if (val > bestVal) {
-        bestVal = val;
-        bestI = i;
-      }
-    }
-    const [picked] = pool.splice(bestI, 1);
-    const main = picked.story.sections[0];
-    seenSections[main] = (seenSections[main] ?? 0) + 1;
-    result.push(picked);
+    result.push(pickVaried(pool, seenSections));
   }
   return result.concat(scored.slice(400));
+}
+
+// Takes from `pool` (sorted by score) the best of its first 15 once each section already shown
+// costs 0.9 per story, so one section does not fill the feed.
+function pickVaried(pool, seenSections) {
+  let bestI = 0;
+  let bestVal = -Infinity;
+  for (let i = 0; i < Math.min(pool.length, 15); i++) {
+    const main = pool[i].story.sections[0];
+    const val = pool[i].score - 0.9 * (seenSections[main] ?? 0);
+    if (val > bestVal) {
+      bestVal = val;
+      bestI = i;
+    }
+  }
+  const [picked] = pool.splice(bestI, 1);
+  const main = picked.story.sections[0];
+  seenSections[main] = (seenSections[main] ?? 0) + 1;
+  return picked;
+}
+
+// "Para mí" in Semana: the WEEK_TOP biggest topics of the week first, in their order, so the
+// person never misses them; then the rest in the person's order. Interest as in the feed, plus
+// WEEK_IMPORTANCE per doubling of the topic's importance (its weekly score): twice the coverage is
+// worth a little more than one level of a section, so a topic the person loves gets in with a third
+// of the coverage of the general ones, and one eight times bigger stays above it. Freshness does
+// not count: the whole week is the window.
+export const WEEK_IMPORTANCE = 2;
+export const WEEK_TOP = 3;
+
+export function rankWeek(stories, profile) {
+  const importanceOf = (story) => Math.max(story.score ?? story.n ?? story.sources.length, 1);
+  const pool = [];
+  for (const story of stories) {
+    const r = scoreStory(story, profile);
+    if (!r) continue;
+    pool.push({ story, importance: importanceOf(story), score: r.interest + WEEK_IMPORTANCE * Math.log2(importanceOf(story)), reasons: r.reasons });
+  }
+  // The biggest ones (of what the person did not filter out), in the order of importance.
+  const top = [...pool].sort((a, b) => b.importance - a.importance).slice(0, WEEK_TOP);
+  const rest = pool.filter((e) => !top.includes(e)).sort((a, b) => b.score - a.score);
+  const result = top.map(({ importance, ...e }) => e);
+  const seenSections = {};
+  for (const e of result) seenSections[e.story.sections[0]] = (seenSections[e.story.sections[0]] ?? 0) + 1;
+  while (rest.length) {
+    const { importance, ...e } = pickVaried(rest, seenSections);
+    result.push(e);
+  }
+  return result;
 }
 
 // What the model has learned, for the Ajustes page.

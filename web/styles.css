@@ -177,7 +177,10 @@ input.code { width: 100%; font: 0.8rem ui-monospace, monospace; padding: 8px; bo
 .weeknav button { flex: none; width: 36px; height: 36px; border: 1px solid var(--border); background: transparent; border-radius: 8px; font-size: 1.3rem; line-height: 1; cursor: pointer; color: var(--text); }
 .weeknav button:hover:not(:disabled) { border-color: var(--muted); }
 .weeknav button:disabled { opacity: 0.3; cursor: default; }
-ol.ranked { list-style: none; margin: 0; padding: 0; counter-reset: rank; }
-ol.ranked > li { counter-increment: rank; position: relative; }
-ol.ranked > li::before { content: counter(rank); position: absolute; left: -6px; top: -6px; z-index: 1; min-width: 22px; height: 22px; border-radius: 999px; background: var(--accent); color: var(--bg); font: 700 0.75rem/22px var(--sans); text-align: center; padding: 0 5px; }
+ol.ranked { list-style: none; margin: 0; padding: 0; }
+ol.ranked > li { position: relative; }
+ol.ranked > li::before { content: attr(data-rank); position: absolute; left: -6px; top: -6px; z-index: 1; min-width: 22px; height: 22px; border-radius: 999px; background: var(--accent); color: var(--bg); font: 700 0.75rem/22px var(--sans); text-align: center; padding: 0 5px; }
 .center-row { justify-content: center; }
+.weeksum { margin: -4px 0 12px; text-align: center; }
+.prevweek { margin: 0 0 6px; font-size: 0.85rem; }
+.prevweek button { border: none; background: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; }
