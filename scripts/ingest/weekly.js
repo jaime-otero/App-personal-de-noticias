@@ -85,13 +85,14 @@ function headlineEntities(titles, summary) {
 
 // What the pool keeps of a story of an edition. The fields shown (title, sources…) all come from
 // one copy of the story, the one with the most outlets (`best`), so a headline never shows with the
-// outlets of another story. `cov`: day → outlets that published an article of it that day.
+// outlets of another story. `cov`: day → outlets that published an article of it that day, by name
+// (an outlet has several feeds: El País international one day and its front page the next is one).
 function entryOf(story, now) {
   const at = firstSeen(story) ?? new Date(now).toISOString();
   const cov = {};
   for (const s of story.sources) {
     const day = dayOf(Date.parse(s.publishedAt ?? story.publishedAt ?? at) || now);
-    (cov[day] ??= new Set()).add(s.sourceId ?? s.source);
+    (cov[day] ??= new Set()).add(s.source ?? s.sourceId);
   }
   const e = {
     id: story.id,
@@ -147,7 +148,7 @@ function legacyPool(week) {
     pool[s.id] = {
       ...rest,
       best: n ?? s.sources.length,
-      cov: { [dayOf(Date.parse(s.publishedAt))]: union(s.sources.map((x) => x.sourceId ?? x.source)) },
+      cov: { [dayOf(Date.parse(s.publishedAt))]: union(s.sources.map((x) => x.source ?? x.sourceId)) },
       urls: s.sources.map((x) => hash(x.url)),
       ents: headlineEntities([s.title, ...s.sources.map((x) => x.title)], s.summary),
     };

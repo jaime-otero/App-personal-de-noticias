@@ -202,6 +202,16 @@ test('outlets add up over the week: a topic that lasts beats a one-day one', () 
   assert.equal(w.stories.one.score, 6);
 });
 
+test('an outlet counts once whatever feed it came through', () => {
+  const weeks = new Map();
+  const first = story('a', 2, ['internacional'], '2026-10-07T10:00:00Z');
+  const second = story('a', 2, ['internacional'], '2026-10-08T10:00:00Z');
+  second.sources[0].sourceId = 'm0-internacional'; // same outlet (Medio 0), another feed
+  foldStories(weeks, [first], NOW);
+  foldStories(weeks, [second], NOW);
+  assert.equal(weeks.get('2026-W41').stories.a.n, 2);
+});
+
 test('the headline shown and its outlets come from the same copy of a story', () => {
   const weeks = new Map();
   foldStories(weeks, [story('a', 8, ['deportes'], undefined, { title: 'Messi se despide de Argentina' })], NOW);
