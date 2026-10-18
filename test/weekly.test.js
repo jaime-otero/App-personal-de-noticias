@@ -353,3 +353,34 @@ test('a service headline gives way to another outlet\'s', () => {
   assert.equal(shown.sources[0].source, 'El País'); // the headline links to its own article
   assert.equal(shown.summary, undefined); // the extract was the service piece's
 });
+
+test('a topic that goes on from the week before links to it', () => {
+  const weeks = new Map();
+  const truce = (id, n, at, title) => withVec(story(id, n, ['internacional/europa'], at, { title }), v(1, 0.05, 0));
+  foldStories(weeks, [
+    truce('w40', 7, '2026-10-02T10:00:00Z', 'Rusia y Ucrania negocian una tregua con Trump'),
+    withVec(story('quake', 5, ['internacional/latam'], '2026-10-02T11:00:00Z', { title: 'Terremoto en Panamá' }), v(0, 1, 0)),
+  ], NOW);
+  foldStories(weeks, [
+    truce('w41a', 4, '2026-10-07T10:00:00Z', 'Trump anuncia la tregua entre Rusia y Ucrania'),
+    truce('w41b', 3, '2026-10-08T10:00:00Z', 'Rusia rompe la tregua en Ucrania, dice Trump'),
+    withVec(story('nobel', 6, ['ciencia'], '2026-10-07T12:00:00Z', { title: 'Nobel de Física para el IceCube' }), v(0, 0, 1)),
+  ], NOW);
+  const w41 = weeks.get('2026-W41');
+  assert.deepEqual(w41.stories.w41a.prev, { week: '2026-W40', id: 'w40', title: 'Rusia y Ucrania negocian una tregua con Trump', n: 7 });
+  assert.equal(w41.stories.nobel.prev, undefined);
+  assert.deepEqual(w41.stories.w41a.ids.sort(), ['w41a', 'w41b']);
+  // The week before does not link forward.
+  assert.equal(weeks.get('2026-W40').stories.w40.prev, undefined);
+});
+
+test('embedMissing rebuilds a week when the one before gets its vectors', async () => {
+  const weeks = new Map();
+  // Stories without vectors (an old edition): no topics, no links yet.
+  foldStories(weeks, [story('w40', 7, ['internacional'], '2026-10-02T10:00:00Z', { title: 'Rusia y Ucrania negocian una tregua con Trump' })], NOW);
+  foldStories(weeks, [story('w41', 4, ['internacional'], '2026-10-07T10:00:00Z', { title: 'Trump anuncia la tregua entre Rusia y Ucrania' })], NOW);
+  assert.equal(weeks.get('2026-W41').stories.w41.prev, undefined);
+  const embedder = { id: 'fake', embed: async (texts) => texts.map(() => v(1, 0)) };
+  assert.deepEqual(await embedMissing(weeks, embedder), ['2026-W40', '2026-W41']);
+  assert.equal(weeks.get('2026-W41').stories.w41.prev.id, 'w40');
+});
