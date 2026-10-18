@@ -286,12 +286,6 @@ function storyCard(entry) {
   const prev = story.prev
     ? `<p class="prevweek"><button data-act="week" data-week="${esc(story.prev.week)}" title="${esc(story.prev.title)}">↩ Viene de la semana pasada</button> <span class="muted">${story.prev.n} ${story.prev.n === 1 ? 'medio' : 'medios'} entonces</span></p>`
     : '';
-  // Weekly topics: the other stories of the topic, in the order they came out.
-  const related = story.related?.length
-    ? `<details class="others"><summary>Cómo ha evolucionado (${story.related.length})</summary><ul>${story.related
-        .map((r) => `<li><a href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener" data-open="${esc(story.id)}"><strong>${esc(dayLabel(r.publishedAt))}</strong> · ${esc(r.source)} · ${esc(r.title)}</a></li>`)
-        .join('')}</ul></details>`
-    : '';
   return `<article class="card${read}" data-id="${esc(story.id)}">
     ${story.image ? `<img class="thumb" src="${esc(safeUrl(story.image))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
     <div class="body">
@@ -300,7 +294,6 @@ function storyCard(entry) {
       ${text}
       ${why}
       ${prev}
-      ${related}
       ${others}
       <div class="actions card-actions">
         <button data-act="like" class="like" aria-pressed="${liked}" aria-label="Me gusta" title="Me gusta: verás más noticias así">${liked ? '❤️' : '🤍'}<span class="label"> Me gusta</span></button>

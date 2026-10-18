@@ -38,7 +38,6 @@ export const KEEP_WEEKS = 12;
 // some list: room for a story to keep gathering outlets before it makes a list.
 const POOL_N = 30;
 const MAX_SOURCES = 6;
-const MAX_RELATED = 8;
 const MAX_IDS = 40;
 const MAX_URLS = 60;
 const MAX_ENTS = 40;
@@ -291,14 +290,6 @@ function topicStory(members) {
   out.ids = members.map((m) => m.id).slice(0, MAX_IDS);
   if (soft) out.soft = true;
   if (members.some((m) => m.spoiler)) out.spoiler = true;
-  // Twice the same headline (two copies the daily grouping kept apart) says nothing new.
-  const seen = new Set([normalize(lead.title)]);
-  const related = members
-    .filter((m) => m !== lead && !seen.has(normalize(m.title)) && seen.add(normalize(m.title)))
-    .sort((a, b) => a.publishedAt.localeCompare(b.publishedAt))
-    .slice(0, MAX_RELATED)
-    .map((m) => ({ id: m.id, title: m.title, url: m.sources[0]?.url, source: m.sources[0]?.source, publishedAt: m.publishedAt, n: m.best }));
-  if (related.length) out.related = related;
   return out;
 }
 
