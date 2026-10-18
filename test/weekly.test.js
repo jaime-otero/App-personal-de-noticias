@@ -240,7 +240,8 @@ test('stories of one topic on different days become one entry with its timeline'
   assert.deepEqual(w.top.all, ['truce', 'energy', 'liga']);
   const t = w.stories.truce;
   assert.equal(t.title, 'Trump anuncia una tregua entre Rusia y Ucrania'); // the most covered
-  assert.deepEqual(t.related.map((r) => [r.id, r.publishedAt, r.url]), [['attack', '2026-10-09T08:00:00Z', 'https://m0.es/attack']]);
+  assert.deepEqual(t.ids, ['truce', 'attack']);
+  assert.equal(t.related, undefined); // no timeline list: it mixed in stories that did not belong
   assert.equal(t.publishedAt, '2026-10-09T08:00:00Z');
   assert.equal(t.n, 5); // the same outlets m0–m2 told both
   assert.equal(t.days, 2);
@@ -274,7 +275,7 @@ test('weeks saved before pools become pools, get vectors and group into topics',
     const w = weeks.get('2026-W41');
     assert.deepEqual(w.top.all, ['a', 'c']);
     assert.equal(w.stories.a.n, 9); // the peak count of the old week is kept
-    assert.deepEqual(w.stories.a.related.map((r) => r.id), ['b']);
+    assert.deepEqual(w.stories.a.ids.sort(), ['a', 'b']);
     assert.equal(w.briefings.all.text, 'Resumen');
 
     await writeWeeks(dir, weeks, changed, NOW);
