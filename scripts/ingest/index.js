@@ -11,7 +11,7 @@ import { summarize, hasAIKey } from './summarize.js';
 import { SECTIONS } from '../../web/lib/taxonomy.js';
 import { aiJobs, inSection } from './jobs.js';
 import { isSpoiler } from '../../web/lib/spoilers.js';
-import { foldStories, readWeeks, writeWeeks, weeklyAIJobs, applyWeeklyAI } from './weekly.js';
+import { foldStories, embedMissing, readWeeks, writeWeeks, weeklyAIJobs, applyWeeklyAI } from './weekly.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const OUT = resolve(ROOT, 'web/data/news.json');
@@ -58,11 +58,17 @@ async function loadPrevious() {
 }
 
 // Weekly archive (in Actions, restored from the cache by the workflow like news.json): the
-// stories of this edition join the week they started in, and in AI runs the weeks that are due get
-// their "La semana en …" summaries (weekly.js decides which). Returns a line for the log.
-async function updateWeekly(stories, now, { ai }) {
+// stories of this edition join the week they started in, the pool stories without a vector get one
+// (to group them into topics), and in AI runs the weeks that are due get their "La semana en …"
+// summaries (weekly.js decides which). Returns a line for the log.
+async function updateWeekly(stories, now, { ai, embedder }) {
   const weeks = await readWeeks(WEEKLY);
   const changed = new Set(foldStories(weeks, stories, now));
+  try {
+    for (const id of await embedMissing(weeks, embedder)) changed.add(id);
+  } catch (err) {
+    console.warn(`⚠ Vectores del archivo semanal no disponibles: ${err.message}`);
+  }
   const jobs = ai ? weeklyAIJobs(weeks, now) : [];
   const results = await mapLimit(jobs, AI_CONCURRENCY, async (job) => {
     try {
@@ -184,7 +190,7 @@ async function main() {
   else await rm(VECTORS, { force: true });
   let weeklyLog;
   try {
-    weeklyLog = await updateWeekly(stories, now, { ai: !skipAI && hasAIKey() });
+    weeklyLog = await updateWeekly(stories, now, { ai: !skipAI && hasAIKey(), embedder: emb?.embedder });
   } catch (err) {
     weeklyLog = `no actualizado: ${err.message}`;
   }

@@ -5,11 +5,14 @@
 //   node scripts/ingest/backfill-weekly.js ediciones/*/news.json
 //
 // Editions are folded oldest first into web/data/weekly/; duplicates (same generatedAt) are skipped.
+// Old editions carry no story vectors: they are computed here if the model is installed, and
+// otherwise by the next ingest run, so the stories can join topics.
 
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { foldStories, readWeeks, writeWeeks } from './weekly.js';
+import { foldStories, embedMissing, readWeeks, writeWeeks } from './weekly.js';
+import { loadEmbedder } from './embed.js';
 
 const WEEKLY = resolve(dirname(fileURLToPath(import.meta.url)), '../../web/data/weekly');
 
@@ -34,5 +37,6 @@ for (const ed of sorted) {
     console.warn(`⚠ Edición ${ed.generatedAt} saltada: ${err.message}`);
   }
 }
+for (const id of await embedMissing(weeks, process.env.EMBED_MODEL === 'off' ? null : await loadEmbedder())) changed.add(id);
 console.log(`✓ ${sorted.length} ediciones (${sorted[0]?.generatedAt ?? '—'} → ${sorted.at(-1)?.generatedAt ?? '—'})`);
 console.log(`  semanal: ${await writeWeeks(WEEKLY, weeks, changed)}`);

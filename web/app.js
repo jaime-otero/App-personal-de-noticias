@@ -250,9 +250,10 @@ function storyCard(entry) {
   const p = state.profile;
   const [first, ...rest] = story.sources;
   const read = p.read[story.id] ? ' read' : '';
-  // Weekly archive stories keep a few outlets and the peak count (n); the date says more than "hace 4 días".
+  // Weekly archive topics keep a few outlets and the count over the week (n); the date says more
+  // than "hace 4 días", and how many days the topic lasted.
   const more = (story.n ?? story.sources.length) - 1;
-  const when = story.n != null ? dayLabel(story.publishedAt) : timeAgo(story.publishedAt);
+  const when = story.n != null ? `${dayLabel(story.publishedAt)}${story.days > 1 ? ` · ${story.days} días` : ''}` : timeAgo(story.publishedAt);
 
   if (p.spoilers.nba && !state.revealed.has(story.id) && isSpoiler(story, p.spoilers.extra)) {
     return `<article class="card spoiler" data-id="${esc(story.id)}">
@@ -281,6 +282,12 @@ function storyCard(entry) {
         .map((s) => `<li><a href="${esc(safeUrl(s.url))}" target="_blank" rel="noopener" data-open="${esc(story.id)}"><strong>${esc(s.source)}</strong> · ${esc(s.title)}</a></li>`)
         .join('')}</ul></details>`
     : '';
+  // Weekly topics: the other stories of the topic, in the order they came out.
+  const related = story.related?.length
+    ? `<details class="others"><summary>Cómo ha evolucionado (${story.related.length})</summary><ul>${story.related
+        .map((r) => `<li><a href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener" data-open="${esc(story.id)}"><strong>${esc(dayLabel(r.publishedAt))}</strong> · ${esc(r.source)} · ${esc(r.title)}</a></li>`)
+        .join('')}</ul></details>`
+    : '';
   return `<article class="card${read}" data-id="${esc(story.id)}">
     ${story.image ? `<img class="thumb" src="${esc(safeUrl(story.image))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
     <div class="body">
@@ -288,6 +295,7 @@ function storyCard(entry) {
       <h2><a href="${esc(safeUrl(first.url))}" target="_blank" rel="noopener" data-open="${esc(story.id)}">${esc(story.title)}</a></h2>
       ${text}
       ${why}
+      ${related}
       ${others}
       <div class="actions card-actions">
         <button data-act="like" class="like" aria-pressed="${liked}" aria-label="Me gusta" title="Me gusta: verás más noticias así">${liked ? '❤️' : '🤍'}<span class="label"> Me gusta</span></button>
@@ -437,11 +445,11 @@ function weeklyView(key) {
   const w = weeks[i];
   const nav = `<div class="weeknav">
     <button data-act="week" data-week="${esc(weeks[i + 1]?.id ?? '')}"${weeks[i + 1] ? '' : ' disabled'} aria-label="Semana anterior">‹</button>
-    <div><strong>${esc(weekLabel(w))}</strong><span class="muted small">${w.id === wk.index.current ? 'Semana en curso: se actualiza con cada edición' : 'Las noticias que más medios cubrieron'}</span></div>
+    <div><strong>${esc(weekLabel(w))}</strong><span class="muted small">${w.id === wk.index.current ? 'Semana en curso: se actualiza con cada edición' : 'Los temas que más medios cubrieron, y durante más días'}</span></div>
     <button data-act="week" data-week="${esc(weeks[i - 1]?.id ?? '')}"${i > 0 ? '' : ' disabled'} aria-label="Semana siguiente">›</button>
   </div>`;
 
-  // The objective order (peak coverage), only leaving out what the person has hidden or filtered.
+  // The objective order (coverage over the week), only leaving out what the person has hidden or filtered.
   const week = wk.weeks.get(wk.week);
   const stories = (week.top[key] ?? []).map((id) => week.stories[id]).filter((st) => st && scoreStory(st, state.profile));
   const list = stories.length

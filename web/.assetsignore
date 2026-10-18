@@ -1,0 +1,2 @@
+# Pools of the weekly archive (scripts/ingest/weekly.js): working data of the ingest, not for the site.
+data/weekly/*.pool.json
