@@ -113,16 +113,32 @@ test('sortEntries orders by recency or by coverage and drops exploration marks',
 // Weekly topics: an importance score (weekly.js) and no freshness that matters.
 const topic = (title, sections, score) => story(title, sections, { score, n: Math.round(score), publishedAt: '2026-09-29T10:00:00Z' });
 
-test('rankWeek: the person\'s sections reorder the week, but a much bigger topic stays above', () => {
+// The three biggest topics of a week, which "Para mí" always puts first.
+const big = () => [topic('Rusia y Ucrania firman una tregua', ['internacional/europa'], 40), topic('Terremoto en Panamá', ['internacional/latam'], 35), topic('El papa sale del hospital', ['internacional'], 30)];
+
+test('rankWeek: the three biggest topics first, then the person\'s sections reorder the rest', () => {
   const p = defaultProfile(NOW);
+  const top = big();
   const politics = topic('El Gobierno convoca elecciones', ['espana/politica'], 16);
   const nba = topic('Doncic firma con los Lakers', ['eeuu/nba'], 8);
-  assert.deepEqual(ids(rankWeek([nba, politics], p)), [politics.id, nba.id]); // without preferences: importance
+  assert.deepEqual(ids(rankWeek([nba, politics, ...top], p)), [...ids(top.map((story) => ({ story }))), politics.id, nba.id]);
   p.sections['eeuu/nba'] = 3; // Me encanta
   p.sections['espana'] = 0; // Poco
-  assert.deepEqual(ids(rankWeek([politics, nba], p)), [nba.id, politics.id]); // 4.5 of interest beat 2 of importance
-  const war = topic('Rusia y Ucrania firman una tregua', ['espana/politica'], 64);
-  assert.equal(ids(rankWeek([nba, war], p))[0], war.id); // 8 times the coverage: 6 points of importance
+  p.sections['internacional'] = 0;
+  // The big three stay first even outside the person's sections; below, 4.5 of interest beat 2 of importance.
+  assert.deepEqual(ids(rankWeek([politics, nba, ...top], p)).slice(3), [nba.id, politics.id]);
+  assert.deepEqual(ids(rankWeek([politics, nba, ...top], p)).slice(0, 3), ids(top.map((story) => ({ story }))));
+  const war = topic('Bruselas aprueba el presupuesto', ['espana/politica'], 128);
+  assert.equal(ids(rankWeek([nba, war], p))[0], war.id);
+});
+
+test('rankWeek: a much bigger topic stays above a loved one beyond the first three', () => {
+  const p = defaultProfile(NOW);
+  p.sections['eeuu/nba'] = 3;
+  p.sections['espana'] = 0;
+  const nba = topic('Doncic firma con los Lakers', ['eeuu/nba'], 2);
+  const budget = topic('El Congreso aprueba los presupuestos', ['espana/politica'], 16);
+  assert.deepEqual(ids(rankWeek([nba, budget, ...big()], p)).slice(3), [budget.id, nba.id]); // 8 times the coverage: 6 points of importance
 });
 
 test('rankWeek leaves out what the person filtered and says why a topic is there', () => {

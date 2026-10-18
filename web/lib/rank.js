@@ -231,25 +231,33 @@ function pickVaried(pool, seenSections) {
   return picked;
 }
 
-// "Para mí" in Semana: the topics of a week in the person's order. Interest as in the feed, plus
+// "Para mí" in Semana: the WEEK_TOP biggest topics of the week first, in their order, so the
+// person never misses them; then the rest in the person's order. Interest as in the feed, plus
 // WEEK_IMPORTANCE per doubling of the topic's importance (its weekly score): twice the coverage is
 // worth a little more than one level of a section, so a topic the person loves gets in with a third
 // of the coverage of the general ones, and one eight times bigger stays above it. Freshness does
 // not count: the whole week is the window.
 export const WEEK_IMPORTANCE = 2;
+export const WEEK_TOP = 3;
 
 export function rankWeek(stories, profile) {
+  const importanceOf = (story) => Math.max(story.score ?? story.n ?? story.sources.length, 1);
   const pool = [];
   for (const story of stories) {
     const r = scoreStory(story, profile);
     if (!r) continue;
-    const importance = Math.max(story.score ?? story.n ?? story.sources.length, 1);
-    pool.push({ story, score: r.interest + WEEK_IMPORTANCE * Math.log2(importance), reasons: r.reasons });
+    pool.push({ story, importance: importanceOf(story), score: r.interest + WEEK_IMPORTANCE * Math.log2(importanceOf(story)), reasons: r.reasons });
   }
-  pool.sort((a, b) => b.score - a.score);
-  const result = [];
+  // The biggest ones (of what the person did not filter out), in the order of importance.
+  const top = [...pool].sort((a, b) => b.importance - a.importance).slice(0, WEEK_TOP);
+  const rest = pool.filter((e) => !top.includes(e)).sort((a, b) => b.score - a.score);
+  const result = top.map(({ importance, ...e }) => e);
   const seenSections = {};
-  while (pool.length) result.push(pickVaried(pool, seenSections));
+  for (const e of result) seenSections[e.story.sections[0]] = (seenSections[e.story.sections[0]] ?? 0) + 1;
+  while (rest.length) {
+    const { importance, ...e } = pickVaried(rest, seenSections);
+    result.push(e);
+  }
   return result;
 }
 
