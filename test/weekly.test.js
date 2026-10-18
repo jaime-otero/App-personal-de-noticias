@@ -294,3 +294,62 @@ test('weeks saved before pools become pools, get vectors and group into topics',
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// A story told by these outlets (by name), on one day.
+function toldBy(id, outlets, extra = {}) {
+  const s = story(id, outlets.length, ['espana'], undefined, extra);
+  s.sources.forEach((x, i) => Object.assign(x, { source: outlets[i], sourceId: outlets[i].toLowerCase() }));
+  return s;
+}
+
+test('outletWeights: specialised outlets weigh half, sources.json can override it', async () => {
+  const { outletWeights } = await import('../scripts/ingest/weekly.js');
+  const w = outletWeights([
+    { name: 'Diario', sections: ['espana'] },
+    { name: 'Diario', sections: ['espana/deportes'] }, // a sports feed of a general paper
+    { name: 'Deportivo', sections: ['espana/deportes'] },
+    { name: 'Deportivo', sections: ['eeuu/nba', 'deportes/tenis'] }, // NBA is sport too
+    { name: 'Revista', sections: ['ciencia/espacio'] },
+    { name: 'Divulga', sections: [], weight: 0.5 },
+    { name: 'Agencia', sections: ['ciencia'], weight: 1 },
+  ]);
+  assert.deepEqual(Object.fromEntries(w), { Diario: 1, Deportivo: 0.5, Revista: 0.5, Divulga: 0.5, Agencia: 1 });
+});
+
+test('specialised outlets count half: a story that reaches the general papers ranks higher', () => {
+  const weeks = new Map();
+  foldStories(weeks, [
+    toldBy('sport', ['Marca', 'AS', 'Mundo Deportivo', 'ESPN', 'BBC Sport', 'CBS Sports']),
+    toldBy('news', ['El País', 'El Mundo', 'ABC', 'RTVE']),
+  ], NOW);
+  const w = weeks.get('2026-W41');
+  assert.deepEqual(w.top.all, ['news', 'sport']);
+  assert.equal(w.stories.sport.n, 6); // the count shown is still every outlet
+  assert.equal(w.stories.sport.score, 3);
+  assert.equal(w.stories.news.score, 4);
+});
+
+test('soft topics weigh less', () => {
+  const weeks = new Map();
+  foldStories(weeks, [
+    toldBy('memes', ['El País', 'El Mundo', 'ABC', 'RTVE', '20minutos'], { title: 'Musk presenta su coche volador y las redes se llenan de memes' }),
+    toldBy('law', ['El País', 'El Mundo', 'ABC', 'RTVE'], { title: 'El Congreso aprueba la ley de vivienda' }),
+  ], NOW);
+  const w = weeks.get('2026-W41');
+  assert.deepEqual(w.top.all, ['law', 'memes']);
+  assert.equal(w.stories.memes.soft, true);
+  assert.equal(w.stories.memes.score, 3);
+  assert.equal(w.stories.law.soft, undefined);
+});
+
+test('a service headline gives way to another outlet\'s', () => {
+  const weeks = new Map();
+  const s = toldBy('match', ['Marca', 'El País'], { title: 'A qué hora es el Alcaraz - Sinner: horario y dónde ver la final', summary: 'Horario y canal' });
+  s.sources[0].title = s.title;
+  s.sources[1].title = 'Alcaraz gana a Sinner y se lleva Shanghái';
+  foldStories(weeks, [s], NOW);
+  const shown = weeks.get('2026-W41').stories.match;
+  assert.equal(shown.title, 'Alcaraz gana a Sinner y se lleva Shanghái');
+  assert.equal(shown.sources[0].source, 'El País'); // the headline links to its own article
+  assert.equal(shown.summary, undefined); // the extract was the service piece's
+});

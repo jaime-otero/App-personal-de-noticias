@@ -11,14 +11,19 @@
 //    the others as its timeline.
 //  - Importance: distinct outlets over the whole week, plus a quarter of every further day an
 //    outlet came back to it (a story that stays on the front pages for days beats a one-day one
-//    with as many outlets), then the languages it was told in.
+//    with as many outlets), then the languages it was told in. Specialised outlets (sport, science,
+//    technology) count half: their coverage says a story matters in its field, a general paper's
+//    that it matters. Soft topics (memes, gossip, deals, lottery) weigh less, and service pieces
+//    ("dónde ver", live pages, galleries) never head a topic.
 //
 // Files (web/data/weekly/): index.json lists the weeks; <week>.json is the published week and
 // <week>.pool.json its pool (left out of the site by web/.assetsignore).
 
+import { readFileSync } from 'node:fs';
 import { readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
-import { SECTIONS } from '../../web/lib/taxonomy.js';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { SECTIONS, compileKeywords } from '../../web/lib/taxonomy.js';
 import { isNbaStory } from '../../web/lib/spoilers.js';
 import { averageLinkage, features, pairScore } from './cluster.js';
 import { fromInt8B64, normalizeVec, toInt8B64 } from './embed.js';
@@ -45,6 +50,59 @@ export const REPEAT_WEIGHT = 0.25;
 // A section belongs to a topic when its stories hold this share of the topic's coverage, as in
 // cluster.js; NBA is always kept (spoiler cover).
 const MIN_SHARE = 0.25;
+// Weight of an outlet whose feeds all belong to one field (SPECIALIST_FIELDS); `weight` on any feed
+// of an outlet in sources.json overrides it.
+export const SPECIALIST_WEIGHT = 0.5;
+// Score of a topic whose stories are mostly soft (SOFT below).
+export const SOFT_FACTOR = 0.6;
+
+// ---------- outlets and headlines ----------
+
+const FIELDS = [
+  ['deportes', /^(deportes|espana\/deportes|eeuu\/(nba|nfl|universitario))(\/|$)/],
+  ['ciencia', /^ciencia(\/|$)/],
+  ['tecnologia', /^tecnologia(\/|$)/],
+];
+const fieldOf = (section) => FIELDS.find(([, re]) => re.test(section))?.[0] ?? 'general';
+
+// Outlet name → weight, from the feeds of sources.json.
+export function outletWeights(sources) {
+  const feeds = new Map();
+  for (const f of sources) feeds.set(f.name, [...(feeds.get(f.name) ?? []), f]);
+  const weights = new Map();
+  for (const [name, list] of feeds) {
+    const explicit = list.find((f) => typeof f.weight === 'number')?.weight;
+    const fields = new Set(list.flatMap((f) => f.sections ?? []).map(fieldOf));
+    const specialist = fields.size === 1 && !fields.has('general');
+    weights.set(name, explicit ?? (specialist ? SPECIALIST_WEIGHT : 1));
+  }
+  return weights;
+}
+const SOURCES = resolve(dirname(fileURLToPath(import.meta.url)), '../../sources.json');
+const WEIGHTS = outletWeights(JSON.parse(readFileSync(SOURCES, 'utf8')));
+const weightOf = (outlet) => WEIGHTS.get(outlet) ?? 1;
+
+// Service pieces: the topic is real, the headline is not the one to lead it with.
+const SERVICE = compileKeywords([
+  'a que hora es', 'a que hora juega', 'horario y donde ver', 'donde ver', 'como ver', 'en directo', 'ultima hora', 'minuto a minuto',
+  'asi te hemos contado', 'asi hemos contado', 'fotos', 'en imagenes', 'galeria', 'how to watch', 'where to watch', 'live stream*',
+  'live updates', 'as it happened', 'in pictures', 'photos',
+]);
+// Soft topics: what goes viral, celebrities' lives, shopping, lottery.
+const SOFT = compileKeywords([
+  'memes', 'meme', 'se hace viral', 'se vuelve viral', 'se viraliza', 'viraliza*', 'goes viral', 'went viral', 'video viral',
+  'las redes se llenan', 'arde en redes', 'incendia las redes', 'revoluciona las redes', 'estalla en redes', 'internet se rinde',
+  'botox', 'famosos', 'famosas', 'celebrity', 'celebrities', 'influencer*', 'tiktoker*', 'youtuber*', 'reality show', 'prensa rosa',
+  'boda', 'se casa', 'divorcio', 'ruptura sentimental', 'nueva novia', 'nuevo novio', 'horoscopo', 'loteria', 'sorteo extraordinario',
+  'el gordo', 'chollo*', 'mejores ofertas', 'fiesta de ofertas', 'prime day', 'black friday', 'rebajas', 'best deals', 'deal of the day',
+]);
+const matches = (res, text) => {
+  const t = normalize(text ?? '');
+  return res.some((re) => re.test(t));
+};
+const isService = (title) => matches(SERVICE, title);
+// A story is soft when its headline is, or half of its outlets' headlines are.
+const isSoft = (e) => matches(SOFT, e.title) || e.sources.filter((x) => matches(SOFT, x.title)).length * 2 >= Math.max(e.sources.length, 2);
 
 export const WEEKLY_KEYS = ['all', ...SECTIONS.flatMap((s) => [s.id, ...s.subs.map((x) => x.key)])];
 
@@ -89,6 +147,9 @@ function headlineEntities(titles, summary) {
 // (an outlet has several feeds: El País international one day and its front page the next is one).
 function entryOf(story, now) {
   const at = firstSeen(story) ?? new Date(now).toISOString();
+  // A service headline ("A qué hora es…") gives way to another outlet's, when there is one.
+  const lead = isService(story.title) ? story.sources.find((x) => !isService(x.title)) : null;
+  const sources = lead ? [lead, ...story.sources.filter((x) => x !== lead)] : story.sources;
   const cov = {};
   for (const s of story.sources) {
     const day = dayOf(Date.parse(s.publishedAt ?? story.publishedAt ?? at) || now);
@@ -96,7 +157,7 @@ function entryOf(story, now) {
   }
   const e = {
     id: story.id,
-    title: story.title,
+    title: lead?.title ?? story.title,
     image: story.image,
     lang: story.lang,
     // Editions from before langs existed (the backfill reads old ones) only have lang.
@@ -104,13 +165,14 @@ function entryOf(story, now) {
     sections: story.sections ?? [],
     publishedAt: at,
     best: story.sources.length,
-    sources: story.sources.slice(0, MAX_SOURCES).map(({ title, url, source, sourceId }) => ({ title, url, source, sourceId })),
+    sources: sources.slice(0, MAX_SOURCES).map(({ title, url, source, sourceId }) => ({ title, url, source, sourceId })),
     cov: Object.fromEntries(Object.entries(cov).map(([d, ids]) => [d, [...ids]])),
     urls: story.sources.map((s) => hash(s.url)).slice(0, MAX_URLS),
     ents: headlineEntities([story.title, ...story.sources.map((s) => s.title)], story.summary),
   };
   if (story.aiSummary) e.aiSummary = story.aiSummary;
-  else if (story.summary) e.summary = story.summary.length > MAX_EXTRACT ? `${story.summary.slice(0, MAX_EXTRACT - 1)}…` : story.summary;
+  // The extract is the service piece's: it would not match the new headline.
+  else if (story.summary && !lead) e.summary = story.summary.length > MAX_EXTRACT ? `${story.summary.slice(0, MAX_EXTRACT - 1)}…` : story.summary;
   if (story.spoiler) e.spoiler = true;
   if (story.vec) e.vec = toInt8B64(story.vec);
   return e;
@@ -144,7 +206,7 @@ function mergeEntries(old, cur) {
 function legacyPool(week) {
   const pool = {};
   for (const s of Object.values(week.stories ?? {})) {
-    const { n, days, score, related, ...rest } = s;
+    const { n, days, score, soft, related, ...rest } = s;
     pool[s.id] = {
       ...rest,
       best: n ?? s.sources.length,
@@ -172,19 +234,25 @@ export function topicsOf(entries) {
   return [...groups, ...entries.filter((e) => !e.vec).map((e) => [e])];
 }
 
-// What a topic weighs: { n: distinct outlets, days, langs, score }.
-export function coverage(members) {
+// What a topic weighs: { n: distinct outlets, days, langs, score }. `weight`: outlet name → weight.
+export function coverage(members, weight = weightOf) {
   const byDay = new Map();
   for (const m of members) for (const [d, ids] of Object.entries(m.cov)) byDay.set(d, union(byDay.get(d), ids));
   const outlets = new Set([...byDay.values()].flat());
-  const outletDays = [...byDay.values()].reduce((sum, ids) => sum + ids.length, 0);
-  // Pools from before outlets were tracked only know the peak count of each story.
+  const sum = (names) => names.reduce((acc, o) => acc + weight(o), 0);
+  const weighted = sum([...outlets]);
+  const repeats = [...byDay.values()].reduce((acc, ids) => acc + sum(ids), 0) - weighted;
+  // Pools from before outlets were tracked only know the peak count of each story: the outlets
+  // they do not list weigh as much, on average, as the ones they do.
   const n = Math.max(outlets.size, ...members.map((m) => m.best));
+  const base = outlets.size ? (weighted * n) / outlets.size : n;
+  const soft = members.filter(isSoft).reduce((acc, m) => acc + m.best, 0) * 2 >= members.reduce((acc, m) => acc + m.best, 0);
   return {
     n,
     days: byDay.size,
     langs: [...new Set(members.flatMap((m) => m.langs))],
-    score: n + REPEAT_WEIGHT * (outletDays - outlets.size),
+    score: (base + REPEAT_WEIGHT * repeats) * (soft ? SOFT_FACTOR : 1),
+    soft,
   };
 }
 
@@ -195,10 +263,12 @@ function topicSections(members, lead) {
   return union(lead.sections, [...weight].filter(([s, w]) => w >= total * MIN_SHARE || s === 'eeuu/nba').map(([s]) => s));
 }
 
-// A topic as the app shows it: its most covered story, with the others as its timeline.
+// A topic as the app shows it: its most covered story (not a service piece, if it has another),
+// with the others as its timeline.
 function topicStory(members) {
-  const lead = members.reduce((a, b) => (b.best > a.best || (b.best === a.best && b.publishedAt < a.publishedAt) ? b : a));
-  const { n, days, langs, score } = coverage(members);
+  const better = (a, b) => isService(a.title) - isService(b.title) || b.best - a.best || a.publishedAt.localeCompare(b.publishedAt);
+  const lead = [...members].sort(better)[0];
+  const { n, days, langs, score, soft } = coverage(members);
   const out = {
     id: lead.id,
     title: lead.title,
@@ -214,6 +284,7 @@ function topicStory(members) {
   };
   if (lead.aiSummary) out.aiSummary = lead.aiSummary;
   else if (lead.summary) out.summary = lead.summary;
+  if (soft) out.soft = true;
   if (members.some((m) => m.spoiler)) out.spoiler = true;
   // Twice the same headline (two copies the daily grouping kept apart) says nothing new.
   const seen = new Set([normalize(lead.title)]);

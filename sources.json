@@ -88,7 +88,7 @@
   {"id": "france24", "name": "France 24", "url": "https://www.france24.com/en/rss", "lang": "en", "sections": ["internacional"]},
   {"id": "elpais-cie", "name": "El País", "url": "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/section/ciencia/portada", "lang": "es", "sections": ["ciencia"]},
   {"id": "sinc", "name": "Agencia SINC", "url": "https://www.agenciasinc.es/feed/Noticias", "lang": "es", "sections": ["ciencia"]},
-  {"id": "muyinteresante", "name": "Muy Interesante", "url": "https://www.muyinteresante.com/feed/", "lang": "es", "sections": []},
+  {"id": "muyinteresante", "name": "Muy Interesante", "url": "https://www.muyinteresante.com/feed/", "lang": "es", "sections": [], "weight": 0.5},
   {"id": "naukas", "name": "Naukas", "url": "https://naukas.com/feed/", "lang": "es", "sections": ["ciencia"]},
   {"id": "quanta", "name": "Quanta Magazine", "url": "https://www.quantamagazine.org/feed/", "lang": "en", "sections": ["ciencia"]},
   {"id": "physicsworld", "name": "Physics World", "url": "https://physicsworld.com/feed/", "lang": "en", "sections": ["ciencia/fisica"]},
