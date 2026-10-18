@@ -116,10 +116,6 @@ dialog::backdrop { background: rgb(0 0 0 / 0.45); }
   .thumb { width: 84px; height: 84px; }
   .card { padding: 12px; gap: 10px; }
   .card h2 { font-size: 1.05rem; }
-  /* Icons only, so the five card buttons fit on one row (each keeps its aria-label). */
-  .card-actions { flex-wrap: nowrap; }
-  .card-actions .label { display: none; }
-  .card-actions button { flex: 1; max-width: 56px; padding: 5px 0; font-size: 0.95rem; }
 }
 @media (max-width: 380px) {
   .thumb { display: none; }
@@ -136,6 +132,14 @@ a.tab { text-decoration: none; display: inline-block; }
 .why { display: inline-block; font-size: 0.78rem; color: var(--accent); margin: 0 0 6px; }
 .why.explore { color: var(--muted); }
 .actions button.like[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+/* Card buttons: small borderless icons on one row, at every width (each keeps its aria-label and a
+   title that says what it does). Touch screens keep them 32 px tall, enough to hit. */
+.card-actions { flex-wrap: nowrap; gap: 2px; margin-left: -6px; }
+.card-actions .label { display: none; }
+.card-actions button { border: none; border-radius: 6px; padding: 2px 7px; font-size: 0.9rem; line-height: 1.4; min-width: 30px; }
+.card-actions button:hover { background: var(--chip); }
+.card-actions button[aria-pressed="true"] { background: var(--chip); }
+@media (pointer: coarse) { .card-actions button { min-height: 32px; min-width: 36px; } }
 .card.spoiler { background: repeating-linear-gradient(-45deg, var(--surface), var(--surface) 10px, var(--chip) 10px, var(--chip) 20px); }
 .spoiler-msg { margin: 6px 0 8px; font-weight: 600; }
 details.briefing { padding: 14px 18px; }
