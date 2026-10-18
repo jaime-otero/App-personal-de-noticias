@@ -289,12 +289,12 @@ function storyCard(entry) {
       ${text}
       ${why}
       ${others}
-      <div class="actions">
-        <button data-act="like" class="like" aria-pressed="${liked}" title="Me gusta: verás más noticias así">${liked ? '❤️' : '🤍'} Me gusta</button>
-        <button data-act="dislike" title="No me interesa: verás menos noticias así">👎</button>
-        <button data-act="save" aria-pressed="${saved}">${saved ? '★ Guardada' : '☆ Guardar'}</button>
-        <button data-act="hide" title="Ocultar solo esta noticia">Ocultar</button>
-        <button data-act="reclass" title="¿Está en la sección equivocada? Dime dónde va">🏷️ Sección</button>
+      <div class="actions card-actions">
+        <button data-act="like" class="like" aria-pressed="${liked}" aria-label="Me gusta" title="Me gusta: verás más noticias así">${liked ? '❤️' : '🤍'}<span class="label"> Me gusta</span></button>
+        <button data-act="dislike" aria-label="No me interesa" title="No me interesa: verás menos noticias así">👎</button>
+        <button data-act="save" aria-pressed="${saved}" aria-label="${saved ? 'Guardada' : 'Guardar'}" title="${saved ? 'Guardada: quitar de Guardados' : 'Guardar para leer después'}">${saved ? '★' : '☆'}<span class="label"> ${saved ? 'Guardada' : 'Guardar'}</span></button>
+        <button data-act="hide" aria-label="Ocultar" title="Ocultar solo esta noticia">✕<span class="label"> Ocultar</span></button>
+        <button data-act="reclass" aria-label="Cambiar de sección" title="¿Está en la sección equivocada? Dime dónde va">🏷️<span class="label"> Sección</span></button>
       </div>
     </div>
   </article>`;
@@ -982,6 +982,8 @@ function openOnboarding() {
     <button class="primary" value="ok">Empezar</button>
   </form>`;
   dlg.querySelector('form').addEventListener('submit', () => {
+    // A sync pull while the dialog was open may have replaced the profile object: edit the current one.
+    const p = state.profile;
     const f = new FormData(dlg.querySelector('form'));
     const picked = new Set(f.getAll('s'));
     for (const s of SECTIONS) {
