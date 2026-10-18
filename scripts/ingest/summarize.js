@@ -131,7 +131,7 @@ Devuelve JSON con esta forma exacta, con UNA entrada en "stories" por CADA notic
  "stories": [{"i": <número entre corchetes>, "id": "<id>", "resumen": "1-2 frases; una sola si solo hay titulares"}]}`;
   const list = stories
     .map((s, i) => {
-      // Weekly archive stories carry their peak outlet count (n) and keep only a few outlets.
+      // Weekly archive topics carry their outlet count over the week (n) and keep only a few outlets.
       const n = s.n ?? s.sources.length;
       const when = s.publishedAt && (week ? dayEs(s.publishedAt) : ago(s.publishedAt, now));
       const meta = [`${n} ${n === 1 ? 'medio' : 'medios'}`, when].filter(Boolean).join(' · ');

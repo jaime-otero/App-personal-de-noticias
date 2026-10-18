@@ -1,8 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { weekOf, foldStories, weeklyIndex, TOP_N, KEEP_WEEKS } from '../scripts/ingest/weekly.js';
+import { weekOf, foldStories, weeklyIndex, embedMissing, TOP_N, KEEP_WEEKS } from '../scripts/ingest/weekly.js';
+import { normalizeVec } from '../scripts/ingest/embed.js';
 
 const NOW = Date.parse('2026-10-11T18:00:00Z'); // Sunday
+
+// Hand-made vectors stand in for the model (cluster.test.js does the same).
+const v = (...xs) => normalizeVec(Float32Array.from(xs));
+const withVec = (story, vec) => Object.defineProperty(story, 'vec', { value: vec, enumerable: false });
 
 function story(id, n, sections, at = '2026-10-09T10:00:00Z', extra = {}) {
   return {
@@ -110,7 +115,7 @@ test('readWeeks/writeWeeks round-trip and drop the files of weeks no longer kept
     assert.deepEqual([...weeks.keys()], ['2026-W01']);
     const changed = foldStories(weeks, [story('a', 3, ['ciencia'])], NOW); // also drops W01 (too old)
     await writeWeeks(dir, weeks, changed, NOW);
-    assert.deepEqual((await readdir(dir)).sort(), ['2026-W41.json', 'index.json']);
+    assert.deepEqual((await readdir(dir)).sort(), ['2026-W41.json', '2026-W41.pool.json', 'index.json']);
     assert.deepEqual([...(await readWeeks(dir)).keys()], ['2026-W41']);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -143,6 +148,7 @@ test('weeklyAIJobs: provisional once a day while the week is open, final once wh
   assert.equal(w.briefings.espana.final, undefined);
   assert.equal(w.stories.a.aiSummary, 'IA de a');
   assert.equal(w.stories.a.summary, undefined);
+  assert.equal(w.pool.a.aiSummary, 'IA de a'); // kept for the next rebuild
 
   // Same day: nothing due. Next day (Monday, not closed yet): provisional again.
   assert.equal(weeklyAIJobs(weeks, NOW + 3 * 3.6e6).length, 0);
@@ -179,4 +185,102 @@ test('foldStories accepts stories from old editions without langs or sections', 
   assert.deepEqual(w.stories.old.langs, ['es']);
   assert.deepEqual(w.stories.bare.sections, []);
   assert.deepEqual(w.top.all, ['old', 'new', 'bare']);
+});
+
+test('outlets add up over the week: a topic that lasts beats a one-day one', () => {
+  const weeks = new Map();
+  foldStories(weeks, [story('long', 4, ['economia'], '2026-10-07T10:00:00Z'), story('one', 6, ['economia'], '2026-10-08T10:00:00Z')], NOW);
+  // Two days later, the first story is back with two more outlets.
+  foldStories(weeks, [story('long', 6, ['economia'], '2026-10-09T10:00:00Z')], NOW);
+  const w = weeks.get('2026-W41');
+  assert.deepEqual(w.top.all, ['long', 'one']);
+  const long = w.stories.long;
+  assert.equal(long.n, 6);
+  assert.equal(long.days, 2);
+  assert.equal(long.score, 6 + 0.25 * 4); // 4 outlets came back on the second day
+  assert.equal(long.publishedAt, '2026-10-07T10:00:00Z');
+  assert.equal(w.stories.one.score, 6);
+});
+
+test('the headline shown and its outlets come from the same copy of a story', () => {
+  const weeks = new Map();
+  foldStories(weeks, [story('a', 8, ['deportes'], undefined, { title: 'Messi se despide de Argentina' })], NOW);
+  // A copy that shares one link but holds fewer outlets (one odd article the daily grouping put
+  // together) does not lend its headline to the other's coverage.
+  const odd = story('b', 2, ['deportes'], undefined, { title: 'Cristiano, a un periodista: deja el bótox' });
+  odd.sources[0] = story('a', 1, [])['sources'][0];
+  foldStories(weeks, [odd], NOW);
+  const w = weeks.get('2026-W41');
+  assert.deepEqual(Object.keys(w.stories), ['b']);
+  assert.equal(w.stories.b.title, 'Messi se despide de Argentina');
+  assert.equal(w.stories.b.sources[0].url, 'https://m0.es/a');
+  assert.equal(w.stories.b.n, 8);
+});
+
+test('stories of one topic on different days become one entry with its timeline', () => {
+  const weeks = new Map();
+  foldStories(weeks, [
+    withVec(story('truce', 5, ['internacional/europa'], '2026-10-10T10:00:00Z', { title: 'Trump anuncia una tregua entre Rusia y Ucrania' }), v(1, 0.1, 0)),
+    withVec(story('attack', 3, ['internacional/europa'], '2026-10-09T08:00:00Z', { title: 'Rusia ataca Ucrania horas antes de hablar con Trump' }), v(1, 0, 0)),
+    // Close vector, but nothing else in common: another topic.
+    withVec(story('energy', 4, ['economia/energia'], '2026-10-09T09:00:00Z', { title: 'Sube el precio del gas en Europa' }), v(1, 0.05, 0)),
+    withVec(story('liga', 2, ['deportes/futbol'], '2026-10-10T20:00:00Z', { title: 'El Barça gana al Sevilla' }), v(0, 0, 1)),
+  ], NOW);
+  const w = weeks.get('2026-W41');
+  assert.deepEqual(w.top.all, ['truce', 'energy', 'liga']);
+  const t = w.stories.truce;
+  assert.equal(t.title, 'Trump anuncia una tregua entre Rusia y Ucrania'); // the most covered
+  assert.deepEqual(t.related.map((r) => [r.id, r.publishedAt, r.url]), [['attack', '2026-10-09T08:00:00Z', 'https://m0.es/attack']]);
+  assert.equal(t.publishedAt, '2026-10-09T08:00:00Z');
+  assert.equal(t.n, 5); // the same outlets m0–m2 told both
+  assert.equal(t.days, 2);
+  assert.ok(t.score > w.stories.energy.score);
+  // Both stories stay in the pool, so the topic keeps adding up.
+  assert.deepEqual(Object.keys(w.pool).sort(), ['attack', 'energy', 'liga', 'truce']);
+});
+
+test('weeks saved before pools become pools, get vectors and group into topics', async () => {
+  const { mkdtemp, readdir, readFile, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { readWeeks, writeWeeks } = await import('../scripts/ingest/weekly.js');
+  const dir = await mkdtemp(join(tmpdir(), 'weekly-'));
+  try {
+    // As the archive saved them: compact stories with their peak outlet count (n).
+    const old = (id, n, title, at) => {
+      const { sources, ...s } = story(id, n, ['internacional'], at, { title });
+      return { ...s, n, sources: sources.slice(0, 6).map(({ title, url, source, sourceId }) => ({ title: `${title} ${id}`, url, source, sourceId })) };
+    };
+    const stories = [old('a', 9, 'Trump anuncia una tregua entre Rusia y Ucrania', '2026-10-10T10:00:00Z'), old('b', 4, 'Rusia ataca Ucrania antes de hablar con Trump', '2026-10-08T10:00:00Z'), old('c', 3, 'El Barça gana al Sevilla', '2026-10-09T10:00:00Z')];
+    const legacy = { id: '2026-W41', start: '2026-10-05', end: '2026-10-11', updatedAt: '2026-10-11T10:00:00Z', briefings: { all: { text: 'Resumen', at: '2026-10-11T10:00:00Z', final: true } }, stories: Object.fromEntries(stories.map((s) => [s.id, s])), top: { all: ['a', 'b', 'c'] } };
+    await writeFile(join(dir, '2026-W41.json'), JSON.stringify(legacy));
+    const weeks = await readWeeks(dir);
+    assert.equal(weeks.get('2026-W41').pool, undefined);
+
+    const embedder = { id: 'fake', embed: async (texts) => texts.map((t) => (/Barça/.test(t) ? v(0, 1) : v(1, 0))) };
+    const changed = await embedMissing(weeks, embedder);
+    assert.deepEqual(changed, ['2026-W41']);
+    assert.deepEqual(await embedMissing(weeks, embedder), []); // nothing left to embed
+    const w = weeks.get('2026-W41');
+    assert.deepEqual(w.top.all, ['a', 'c']);
+    assert.equal(w.stories.a.n, 9); // the peak count of the old week is kept
+    assert.deepEqual(w.stories.a.related.map((r) => r.id), ['b']);
+    assert.equal(w.briefings.all.text, 'Resumen');
+
+    await writeWeeks(dir, weeks, changed, NOW);
+    assert.deepEqual((await readdir(dir)).sort(), ['2026-W41.json', '2026-W41.pool.json', 'index.json']);
+    const published = JSON.parse(await readFile(join(dir, '2026-W41.json'), 'utf8'));
+    assert.equal(published.pool, undefined);
+    assert.equal(published.model, undefined);
+    const again = (await readWeeks(dir)).get('2026-W41');
+    assert.equal(again.model, 'fake');
+    assert.deepEqual(Object.keys(again.pool).sort(), ['a', 'b', 'c']);
+    assert.ok(again.pool.a.vec);
+    // Another model: its vectors are not comparable, so every story is embedded again.
+    const other = { id: 'other', embed: async (texts) => texts.map(() => v(1, 0)) };
+    assert.deepEqual(await embedMissing(new Map([['2026-W41', again]]), other), ['2026-W41']);
+    assert.equal(again.model, 'other');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

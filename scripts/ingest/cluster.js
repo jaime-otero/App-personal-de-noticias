@@ -42,25 +42,31 @@ export function pairScore(cos, a, b) {
   return cos + ENTITY_BONUS * Math.min(shared, MAX_ENTITIES) - (conflict ? SCORELINE_PENALTY : 0);
 }
 
-const hoursApart = (a, b) => (a.t == null || b.t == null ? 0 : Math.abs(a.t - b.t) / 3.6e6);
-
 // Average-linkage agglomerative clustering with a threshold, run inside each connected component of
 // the graph of pairs that could link (blocking). Average linkage, unlike joining a story through its
 // closest article, does not chain unrelated stories through a shared topic ("everything Trump").
 function groupByEmbeddings(articles, vectors, link) {
   const items = articles.map((a) => ({ a, v: vectors.get(a.id), t: a.publishedAt ? Date.parse(a.publishedAt) : null, ...features(a) }));
+  return averageLinkage(items, link).map((g) => g.map((i) => items[i].a));
+}
+
+// items: [{ v: normalised vector, t: ms or null, ents: Set, score: scoreline or null }]. Pairs more
+// than `windowHours` apart never link; `pair(cos, a, b)` scores the rest. Returns groups of item
+// indices. Also groups the stories of a week into topics (weekly.js), with its own window and score.
+export function averageLinkage(items, link, { windowHours = WINDOW_HOURS, pair: pairFn = pairScore } = {}) {
   const n = items.length;
-  const score = (i, j) => (hoursApart(items[i], items[j]) > WINDOW_HOURS ? 0 : pairScore(dot(items[i].v, items[j].v), items[i], items[j]));
+  const hoursApart = (a, b) => (a.t == null || b.t == null ? 0 : Math.abs(a.t - b.t) / 3.6e6);
+  const score = (i, j) => (hoursApart(items[i], items[j]) > windowHours ? 0 : pairFn(dot(items[i].v, items[j].v), items[i], items[j]));
   // A pair can only reach the threshold with a cosine above link - max bonus.
   const minCos = link - ENTITY_BONUS * MAX_ENTITIES;
   const adj = Array.from({ length: n }, () => []);
   const known = new Map();
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      if (hoursApart(items[i], items[j]) > WINDOW_HOURS) continue;
+      if (hoursApart(items[i], items[j]) > windowHours) continue;
       const cos = dot(items[i].v, items[j].v);
       if (cos < minCos) continue;
-      const s = pairScore(cos, items[i], items[j]);
+      const s = pairFn(cos, items[i], items[j]);
       if (s < link) continue;
       known.set(i * n + j, s);
       adj[i].push([j, s]);
@@ -126,7 +132,7 @@ function groupByEmbeddings(articles, vectors, link) {
     }
     groups.push(...clusters);
   }
-  return groups.map((g) => g.map((i) => items[i].a));
+  return groups;
 }
 
 // ---------- words (fallback) ----------
