@@ -425,7 +425,7 @@ async function fetchWeekly() {
       if (res.status === 404) wk.index = { weeks: [] };
       else if (!res.ok) throw new Error(res.status);
       else wk.index = await res.json();
-      if (!wk.index.weeks.some((w) => w.id === wk.week)) wk.week = wk.index.weeks[0]?.id ?? null;
+      if (!wk.index.weeks.some((w) => w.id === wk.week)) wk.week = wk.index.weeks.some((w) => w.id === wk.index.current) ? wk.index.current : (wk.index.weeks[0]?.id ?? null);
     }
     if (wk.week && !wk.weeks.has(wk.week)) {
       const res = await fetch(`data/weekly/${wk.week}.json`, { cache: 'no-cache' });
