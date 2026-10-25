@@ -148,15 +148,13 @@ function headlineEntities(titles, summary) {
 // outlets of another story. `cov`: day → outlets that published an article of it that day, by name
 // (an outlet has several feeds: El País international one day and its front page the next is one).
 function entryOf(story, now) {
-  // A feed with a date in the future (a misdated article) would open a week that has not begun.
-  const past = (iso) => (Date.parse(iso) > now ? new Date(now).toISOString() : iso);
-  const at = past(firstSeen(story) ?? new Date(now).toISOString());
+  const at = firstSeen(story) ?? new Date(now).toISOString();
   // A service headline ("A qué hora es…") gives way to another outlet's, when there is one.
   const lead = isService(story.title) ? story.sources.find((x) => !isService(x.title)) : null;
   const sources = lead ? [lead, ...story.sources.filter((x) => x !== lead)] : story.sources;
   const cov = {};
   for (const s of story.sources) {
-    const day = dayOf(Math.min(Date.parse(s.publishedAt ?? story.publishedAt ?? at) || now, now));
+    const day = dayOf(Date.parse(s.publishedAt ?? story.publishedAt ?? at) || now);
     (cov[day] ??= new Set()).add(s.source ?? s.sourceId);
   }
   const e = {
@@ -386,9 +384,7 @@ export function foldStories(weeks, stories, now = Date.now()) {
     rebuild(week, prevOf(weeks, week));
     week.updatedAt = new Date(now).toISOString();
   }
-  // Also weeks that have not begun, saved by an earlier run before dates were capped.
-  const current = weekOf(now).start;
-  for (const id of weeks.keys()) if (weeks.get(id).start < oldest || weeks.get(id).start > current) weeks.delete(id);
+  for (const id of weeks.keys()) if (weeks.get(id).start < oldest) weeks.delete(id);
   return [...changed];
 }
 

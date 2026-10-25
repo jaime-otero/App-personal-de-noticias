@@ -385,11 +385,3 @@ test('embedMissing rebuilds a week when the one before gets its vectors', async 
   assert.deepEqual(await embedMissing(weeks, embedder), ['2026-W40', '2026-W41']);
   assert.equal(weeks.get('2026-W41').stories.w41.prev.id, 'w40');
 });
-
-test('foldStories: a story dated in the future joins the current week, and weeks that have not begun are dropped', () => {
-  const weeks = new Map([['2026-W42', { id: '2026-W42', start: '2026-10-12', end: '2026-10-18', pool: {}, stories: {}, top: {} }]]);
-  const changed = foldStories(weeks, [story('f', 2, ['espana'], '2026-10-14T10:00:00Z')], NOW);
-  assert.deepEqual(changed, ['2026-W41']);
-  assert.deepEqual([...weeks.keys()], ['2026-W41']);
-  assert.ok(weeks.get('2026-W41').pool.f.publishedAt <= new Date(NOW).toISOString());
-});
