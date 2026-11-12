@@ -203,8 +203,13 @@ function showNewEdition() {
 setInterval(showUpdated, 60e3);
 setInterval(checkForUpdate, CHECK_EVERY);
 
+// A weekly topic can share its id with a story of "Ahora" (its lead story still in the edition): in
+// "Semana" the card is the topic, and that is the one to like, save or redraw.
+const inWeekView = () => feedMode === 'week' && ['foryou', 'section'].includes(state.route.view);
+const weeklyStory = (id) => state.weekly.weeks.get(state.weekly.week)?.stories[id];
 const findStory = (id) =>
-  state.data?.stories.find((s) => s.id === id) ?? state.weekly.weeks.get(state.weekly.week)?.stories[id] ?? state.profile.liked[id]?.d ?? state.profile.saved[id]?.d;
+  (inWeekView() && weeklyStory(id)) ||
+  (state.data?.stories.find((s) => s.id === id) ?? weeklyStory(id) ?? state.profile.liked[id]?.d ?? state.profile.saved[id]?.d);
 const inSection = (story, key) => (story.sections ?? []).some((s) => s === key || s.startsWith(`${key}/`));
 
 // ---------- views ----------
@@ -607,7 +612,10 @@ function learn(story, signal) {
 }
 
 function rerenderCard(card, story) {
-  const entry = rankStories([story], state.profile)[0] ?? { story };
+  // In "Semana", as weeklyView draws it: no reasons in the objective order.
+  const entry = inWeekView()
+    ? (weekOrder === 'me' ? rankWeek([story], state.profile)[0] : null) ?? { story }
+    : (rankStories([story], state.profile)[0] ?? { story });
   card.outerHTML = storyCard(entry);
 }
 

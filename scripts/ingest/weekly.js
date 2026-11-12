@@ -187,6 +187,10 @@ const union = (a = [], b = [], max = Infinity) => [...new Set([...a, ...b])].sli
 function mergeEntries(old, cur) {
   const shown = cur.best >= old.best ? cur : old;
   const out = { ...shown, id: cur.id, best: Math.max(old.best, cur.best) };
+  // The ids it went by: whoever read or liked it under an older one has still seen it.
+  const aka = union([old.id, ...(old.aka ?? []), ...(cur.aka ?? [])], [], MAX_IDS).filter((id) => id !== cur.id);
+  if (aka.length) out.aka = aka;
+  else delete out.aka;
   out.langs = union(old.langs, cur.langs);
   out.publishedAt = old.publishedAt < cur.publishedAt ? old.publishedAt : cur.publishedAt;
   out.cov = { ...old.cov };
@@ -287,7 +291,7 @@ function topicStory(members) {
   if (lead.aiSummary) out.aiSummary = lead.aiSummary;
   else if (lead.summary) out.summary = lead.summary;
   // Every story id of the topic: the app knows a topic was read if any of them was.
-  out.ids = members.map((m) => m.id).slice(0, MAX_IDS);
+  out.ids = union(members.map((m) => m.id), members.flatMap((m) => m.aka ?? []), MAX_IDS);
   if (soft) out.soft = true;
   if (members.some((m) => m.spoiler)) out.spoiler = true;
   return out;
@@ -332,6 +336,7 @@ const rank = (a, b) => b.score - a.score || b.langs.length - a.langs.length || a
 // Rebuilds the published week from its pool, and drops from the pool the stories of topics no
 // list could still reach. `prev`: the week before, for the topics that go on from it.
 export function rebuild(week, prev = null) {
+  dedupePool(week.pool);
   const pool = Object.values(week.pool);
   const topics = topicsOf(pool)
     .map((members) => ({ members, story: topicStory(members) }))
@@ -351,10 +356,42 @@ export function rebuild(week, prev = null) {
   week.pool = Object.fromEntries([...keep].flatMap((t) => t.members).map((e) => [e.id, e]));
 }
 
+// The same headline from the same outlet is the same article, whatever links each copy kept (they
+// keep 60 at most) or id it had: the copies a run failed to join must not show as two topics.
+const MIN_KEY_WORDS = 4;
+function sameKey(e) {
+  const t = normalize(e.title ?? '');
+  return t.split(/\s+/).filter(Boolean).length >= MIN_KEY_WORDS ? `${e.sources?.[0]?.source ?? ''}|${t}` : null;
+}
+
+// Every pool entry that is this story: the same id, a shared link or the same headline and outlet.
 function findSame(week, entry) {
-  if (week.pool[entry.id]) return week.pool[entry.id];
   const urls = new Set(entry.urls);
-  return Object.values(week.pool).find((e) => e.urls.some((u) => urls.has(u)));
+  const key = sameKey(entry);
+  return Object.values(week.pool).filter((e) => e.id === entry.id || e.urls.some((u) => urls.has(u)) || (key && sameKey(e) === key));
+}
+
+// Joins the copies of a story already in the pool (pools saved before copies were joined): the
+// newest copy keeps its id. Returns whether it joined any.
+function dedupePool(pool) {
+  let joined = false;
+  const byKey = new Map();
+  for (const e of Object.values(pool).sort((a, b) => a.publishedAt.localeCompare(b.publishedAt) || a.id.localeCompare(b.id))) {
+    const key = sameKey(e);
+    if (!key) continue;
+    const old = byKey.get(key);
+    if (!old) {
+      byKey.set(key, e);
+      continue;
+    }
+    delete pool[old.id];
+    delete pool[e.id];
+    const merged = mergeEntries(old, e);
+    pool[merged.id] = merged;
+    byKey.set(key, merged);
+    joined = true;
+  }
+  return joined;
 }
 
 // weeks: Map week id → week ({ id, start, end, updatedAt, pool, stories, top, briefings }), updated
@@ -370,14 +407,15 @@ export function foldStories(weeks, stories, now = Date.now()) {
     let week = weeks.get(w.id);
     if (!week) weeks.set(w.id, (week = { ...w, pool: {}, stories: {}, top: {} }));
     week.pool ??= legacyPool(week);
-    const same = findSame(week, e);
-    if (same) {
+    for (const same of findSame(week, e)) {
       delete week.pool[same.id];
       e = mergeEntries(same, e);
     }
     week.pool[e.id] = e;
     changed.add(w.id);
   }
+  // Weeks saved with copies of a story showing as two topics are rebuilt too.
+  for (const week of weeks.values()) if (!changed.has(week.id) && week.pool && dedupePool(week.pool)) changed.add(week.id);
   // Oldest first: a week links to the topics of the one before as just rebuilt.
   for (const id of [...changed].sort()) {
     const week = weeks.get(id);
