@@ -385,3 +385,42 @@ test('embedMissing rebuilds a week when the one before gets its vectors', async 
   assert.deepEqual(await embedMissing(weeks, embedder), ['2026-W40', '2026-W41']);
   assert.equal(weeks.get('2026-W41').stories.w41.prev.id, 'w40');
 });
+
+test('copies of a story with the same headline and outlet become one topic, whatever links they kept', () => {
+  const weeks = new Map();
+  const a = story('a', 3, ['economia'], '2026-10-08T10:00:00Z', { title: 'El Gobierno aprueba la subida del salario mínimo' });
+  // Another edition: same lead article, but none of the links a kept and another id.
+  const b = story('b', 5, ['economia'], '2026-10-09T10:00:00Z', { title: 'El Gobierno aprueba la subida del salario mínimo' });
+  b.sources[0].source = a.sources[0].source;
+  foldStories(weeks, [a], NOW);
+  foldStories(weeks, [b], NOW);
+  const w = weeks.get('2026-W41');
+  assert.deepEqual(Object.keys(w.stories), ['b']);
+  assert.deepEqual(w.stories.b.ids.sort(), ['a', 'b']); // reading or liking it as a still counts
+  assert.equal(w.stories.b.n, 5);
+});
+
+test('a pool saved with copies of one story is joined on the next rebuild', () => {
+  const weeks = new Map();
+  const title = 'Dimite el ministro tras cuatro horas de comparecencia';
+  foldStories(weeks, [story('a', 3, ['espana'], '2026-10-08T10:00:00Z', { title })], NOW);
+  const w = weeks.get('2026-W41');
+  // As older runs left it: a second copy that no run joined to the first.
+  w.pool.c = { ...structuredClone(w.pool.a), id: 'c', urls: ['otra'], publishedAt: '2026-10-09T10:00:00.000Z' };
+  foldStories(weeks, [story('x', 1, ['ciencia'])], NOW);
+  assert.ok(!(w.pool.a && w.pool.c));
+  assert.equal(Object.values(w.stories).filter((s) => s.title === title).length, 1);
+});
+
+test('a past week saved with copies of one story is rebuilt even if no story of it comes back', () => {
+  const weeks = new Map();
+  const title = 'El Supremo anula la condena del caso de los ERE';
+  foldStories(weeks, [story('a', 3, ['espana'], '2026-10-08T10:00:00Z', { title })], NOW);
+  const w = weeks.get('2026-W41');
+  w.pool.c = { ...structuredClone(w.pool.a), id: 'c', urls: ['otra'], publishedAt: '2026-10-09T10:00:00.000Z' };
+  w.stories.c = { ...w.stories.a, id: 'c' };
+  const later = NOW + 7 * 864e5; // an edition of the next week only
+  const changed = foldStories(weeks, [story('y', 2, ['ciencia'], '2026-10-15T10:00:00Z')], later);
+  assert.ok(changed.includes('2026-W41'));
+  assert.equal(Object.values(w.stories).filter((s) => s.title === title).length, 1);
+});
