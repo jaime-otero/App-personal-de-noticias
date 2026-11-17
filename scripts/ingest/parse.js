@@ -87,7 +87,26 @@ export function parseFeed(xml, source) {
   return out;
 }
 
-const FEED_ROOT = /^\s*(?:\uFEFF)?(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*|<\?xml-stylesheet[^>]*\?>\s*)*<(?:rss|feed|rdf:RDF)[\s>]/;
+// Does the body start, after a BOM, the XML declaration, processing instructions and comments, with
+// an RSS, Atom or RDF root? A linear scan with indexOf, not a regex: the body comes from the network.
+function isFeedXml(body) {
+  let i = 0;
+  const n = body.length;
+  if (body.charCodeAt(0) === 0xfeff) i = 1;
+  for (;;) {
+    while (i < n && ' \t\r\n'.includes(body[i])) i++;
+    if (body.startsWith('<?', i)) {
+      const end = body.indexOf('?>', i + 2);
+      if (end < 0) return false;
+      i = end + 2;
+    } else if (body.startsWith('<!--', i)) {
+      const end = body.indexOf('-->', i + 4);
+      if (end < 0) return false;
+      i = end + 3;
+    } else break;
+  }
+  return ['<rss', '<feed', '<rdf:RDF'].some((tag) => body.startsWith(tag, i) && /[\s>\/]/.test(body[i + tag.length] ?? ''));
+}
 
 // parseFeed for the ingest: an empty or non-XML body (an HTML error page, a CDN challenge) with no
 // items is an error, so the source shows ok:false in the status instead of a silent ok:true, count 0.
@@ -95,6 +114,6 @@ const FEED_ROOT = /^\s*(?:\uFEFF)?(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*|<\
 export function readFeed(body, source) {
   if (!String(body ?? '').trim()) throw new Error('respuesta vacía: 0 items');
   const items = parseFeed(body, source);
-  if (!items.length && !FEED_ROOT.test(body)) throw new Error('no es un feed RSS/Atom: 0 items');
+  if (!items.length && !isFeedXml(body)) throw new Error('no es un feed RSS/Atom: 0 items');
   return items;
 }

@@ -26,3 +26,12 @@ test('readFeed: an empty or non-XML body is an error, a real empty feed is not',
   const xml = '﻿<?xml version="1.0"?>\n<!-- c --><rss><channel><item><title>T</title><link>https://ex.com/a</link></item></channel></rss>';
   assert.equal(readFeed(xml, src).length, 1);
 });
+
+test('readFeed stays linear on hostile bodies (no regex backtracking)', () => {
+  const t0 = performance.now();
+  assert.throws(() => readFeed('<!--'.repeat(200_000), src)); // the XML parser rejects it first
+  assert.throws(() => readFeed('<!-- -->\n'.repeat(200_000) + '<html/>', src), /no es un feed/);
+  assert.throws(() => readFeed('<?x?>'.repeat(200_000) + '<html>', src));
+  assert.throws(() => readFeed(' \n'.repeat(200_000) + '<rssx/>', src));
+  assert.ok(performance.now() - t0 < 2000);
+});
