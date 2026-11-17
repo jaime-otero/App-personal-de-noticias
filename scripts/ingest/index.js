@@ -2,7 +2,8 @@ import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseFeed } from './parse.js';
+import { readFeed } from './parse.js';
+import { fetchText } from './fetch.js';
 import { classify } from './classify.js';
 import { clusterArticles } from './cluster.js';
 import { loadEmbedder, embedArticles, toInt8B64 } from './embed.js';
@@ -21,17 +22,6 @@ const WEEKLY = resolve(ROOT, 'web/data/weekly');
 const MAX_AGE_HOURS = 48;
 const MAX_PER_SOURCE = 30;
 const AI_CONCURRENCY = 3;
-const USER_AGENT = 'Mozilla/5.0 (compatible; MiDiarioBot/0.1; lector RSS personal)';
-
-async function fetchText(url) {
-  const res = await fetch(url, {
-    headers: { 'user-agent': USER_AGENT, accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
-}
 
 async function mapLimit(items, limit, fn) {
   const results = new Array(items.length);
@@ -96,7 +86,7 @@ async function main() {
 
   const perSource = await mapLimit(sources, 8, async (src) => {
     try {
-      const items = parseFeed(await fetchText(src.url), src)
+      const items = readFeed(await fetchText(src.url), src)
         .filter((a) => !a.publishedAt || now - Date.parse(a.publishedAt) < MAX_AGE_HOURS * 3.6e6)
         .slice(0, MAX_PER_SOURCE);
       status.push({ id: src.id, name: src.name, ok: true, count: items.length });

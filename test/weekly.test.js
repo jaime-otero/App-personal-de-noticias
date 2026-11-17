@@ -320,7 +320,7 @@ test('outletWeights: specialised outlets weigh half, sources.json can override i
 test('specialised outlets count half: a story that reaches the general papers ranks higher', () => {
   const weeks = new Map();
   foldStories(weeks, [
-    toldBy('sport', ['Marca', 'AS', 'Mundo Deportivo', 'ESPN', 'BBC Sport', 'CBS Sports']),
+    toldBy('sport', ['Marca', 'AS', 'Mundo Deportivo', 'MLB.com', 'BBC Sport', 'CBS Sports']),
     toldBy('news', ['El País', 'El Mundo', 'ABC', 'RTVE']),
   ], NOW);
   const w = weeks.get('2026-W41');
