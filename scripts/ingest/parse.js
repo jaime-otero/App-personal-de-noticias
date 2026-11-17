@@ -86,3 +86,15 @@ export function parseFeed(xml, source) {
   }
   return out;
 }
+
+const FEED_ROOT = /^\s*(?:\uFEFF)?(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*|<\?xml-stylesheet[^>]*\?>\s*)*<(?:rss|feed|rdf:RDF)[\s>]/;
+
+// parseFeed for the ingest: an empty or non-XML body (an HTML error page, a CDN challenge) with no
+// items is an error, so the source shows ok:false in the status instead of a silent ok:true, count 0.
+// A real feed that is just empty right now still comes back as [].
+export function readFeed(body, source) {
+  if (!String(body ?? '').trim()) throw new Error('respuesta vacía: 0 items');
+  const items = parseFeed(body, source);
+  if (!items.length && !FEED_ROOT.test(body)) throw new Error('no es un feed RSS/Atom: 0 items');
+  return items;
+}
